@@ -2,7 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const { appId } = require('./constants.js')
 
-const PROJECT_URL = 'https://github.com/shy1132/VacuumTube'
+const PROJECT_URL = 'https://github.com/watchinthewheels20/VacuumTube'
 const RELEASES_URL = `${PROJECT_URL}/releases/latest`
 const FLATPAK_URL = `https://flathub.org/apps/${appId}`
 
