@@ -130,7 +130,7 @@
         },
         "publish": {
             "provider": "github",
-            "owner": "shy1132",
+            "owner": "watchinthewheels20",
             "repo": "VacuumTube"
         }
     },
