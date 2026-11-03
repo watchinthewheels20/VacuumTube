@@ -26,7 +26,7 @@
 - Preserve the YouTube Leanback experience and existing working TV-style navigation, controller support, keyboard shortcuts, playback features and settings unless the review explicitly changes them.
 - **Media remote focus rule:** hardware/system media actions (especially play/pause) must not control VacuumTube when its window is unfocused or minimized. They must work again after focus returns. Preserve the existing Media Session guard and add focused/unfocused regression tests when editing input handling.
 - **Focus is not pause:** ordinary playback may continue after the window loses focus; the optional `pause_on_blur` setting independently controls whether losing focus pauses playback. Do not conflate these behaviours.
-- Preserve the app/installer identity and existing-user settings unless a deliberate migration is required. On Windows, the normal user-data directory is `%APPDATA%\VacuumTube\\`; preferences are stored in `config.json` (with legacy `state.json` migration). Treat session data, userstyles and user settings as persistent across installer updates.
+- Preserve the app/installer identity and existing-user settings unless a deliberate migration is required. On Windows, the normal user-data directory is `%APPDATA%\VacuumTube\`; preferences are stored in `config.json` (with legacy `state.json` migration). Treat session data, userstyles and user settings as persistent across installer updates.
 - Protect the Electron/web-content boundary: do not introduce unvalidated privileged IPC or expose credentials, tokens, private user data or secrets in commits, workflow logs or diagnostic output. Respect the upstream MIT license and attribution.
 - Target **Windows x64 NSIS** for this fork's releases. Retain the familiar interactive installation wizard, selectable destination and uninstaller. Do not silently add other platforms, architectures or portable assets.
 - Do not redirect publishing or update links to the upstream repository. Currently the fork is configured in `package.json` and `src/updater.js`. Do not claim that automatic updates work merely because update metadata is published: verify version comparison, installation type and actual updater behaviour.
@@ -55,7 +55,7 @@
 - With the app focused, media remote **play/pause** and other supported system media actions operate normally; with another window focused or VacuumTube minimized, they do not control VacuumTube; on refocus, they operate again.
 - Playback continues out of focus when **Pause on Blur** is off; when it is on, the app pauses on blur. Test keyboard navigation, gamepad input and remapped media controls for regressions.
 - YouTube Leanback opens and plays videos; fullscreen/window sizing, the settings overlay and selected features continue to function.
-- Existing installs retain `%APPDATA%\VacuumTube\\` configuration and session state, including migration of legacy `state.json` where relevant; installing an update does not silently reset preferences.
+- Existing installs retain `%APPDATA%\VacuumTube\` configuration and session state, including migration of legacy `state.json` where relevant; installing an update does not silently reset preferences.
 - Build a real x64 `VacuumTube-Setup.exe`; verify its release asset and metadata; where Windows test access exists, exercise installation over an existing copy, launch, shortcuts and uninstallation. Explicitly mark hands-on installer/remote checks unverified if not performed.
 
 ## Rules for keeping this file accurate
