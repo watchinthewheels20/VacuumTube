@@ -61,3 +61,7 @@
 ## Rules for keeping this file accurate
 
 Update this contract when release mechanics, compatibility boundaries, data persistence or architectural decisions materially change. Re-check `package.json`, CI and the latest commit before citing versions or releases. Keep version-specific examples illustrative rather than permanent rules. Never store credentials, secrets, tokens or sensitive user information in this file.
+
+## Codex migration handover
+
+Read [`docs/CODEX_HANDOVER.md`](docs/CODEX_HANDOVER.md) for the 19 November 2026 ChatGPT-to-Codex project context. It is a historical snapshot: this `AGENTS.md`, current code and CI are authoritative if anything differs.
