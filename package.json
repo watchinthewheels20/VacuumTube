@@ -74,6 +74,7 @@
             "uninstallDisplayName": "VacuumTube",
             "oneClick": false,
             "allowToChangeInstallationDirectory": true,
+            "deleteAppDataOnUninstall": false,
             "allowElevation": true,
             "perMachine": false
         },
@@ -132,6 +133,7 @@
     "dependencies": {
         "chokidar": "^5.0.0",
         "electron-updater": "^6.8.10",
+        "flag-icons": "7.6.0",
         "string-argv": "^0.3.2"
     }
 }

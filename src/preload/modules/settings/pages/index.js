@@ -12,7 +12,7 @@ const pages = [
     require('./about'),
     require('./sponsorblock'),
     require('./h264ify'),
-    require('./guide-tabs'),
+    require('./home-recommendations'),
     require('./userstyles'),
     require('./features'),
     require('./mac-permissions')

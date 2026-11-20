@@ -5,6 +5,8 @@ const functions = require('./functions')
 const responseModifiers = []
 const requestModifiers = []
 const OriginalXMLHttpRequest = window.XMLHttpRequest;
+const pageFetch = window.fetch.bind(window)
+const browsePath = '/youtubei/v1/browse'
 const nativeResponseText = Object.getOwnPropertyDescriptor(OriginalXMLHttpRequest.prototype, 'responseText').get;
 const nativeResponse = Object.getOwnPropertyDescriptor(OriginalXMLHttpRequest.prototype, 'response').get;
 
@@ -16,6 +18,7 @@ function XMLHttpRequest() {
     const xhr = new OriginalXMLHttpRequest()
     const originalOpen = xhr.open;
     const originalSend = xhr.send;
+    const originalSetHeader = xhr.setRequestHeader
     const originalAddEventListener = xhr.addEventListener;
     const originalRemoveEventListener = xhr.removeEventListener;
 
@@ -24,10 +27,15 @@ function XMLHttpRequest() {
     let modification = null; //promise of the response being modified
     let modifiedText = null;
     let request = 0; //increases with every open() so a modification still running from the previous request can't affect the next one
+    let browseUrl = null
+    let browseHeaders
+    let requestInfo
 
     function modifyResponse() {
         if (!modification) {
             let current = request;
+            const responseUrl = url
+            const responseInfo = requestInfo
             modification = (async () => {
                 if (xhr.responseType !== '' && xhr.responseType !== 'text') return;
                 if (xhr.status === 0) return; //aborted or failed, nothing to modify
@@ -36,7 +44,7 @@ function XMLHttpRequest() {
 
                 for (let modifier of responseModifiers) {
                     try {
-                        let modified = await modifier(url, text)
+                        let modified = await modifier(responseUrl, text, responseInfo)
                         if (modified === undefined) continue;
 
                         text = modified;
@@ -121,6 +129,10 @@ function XMLHttpRequest() {
 
     xhr.open = function (method, requestUrl) {
         url = String(requestUrl)
+        const endpoint = new URL(url, location.href)
+        browseUrl = method.toUpperCase() === 'POST' && endpoint.origin === 'https://www.youtube.com' && endpoint.pathname === browsePath ? endpoint.href : null
+        browseHeaders = browseUrl ? new Headers() : null
+        requestInfo = null
         modification = null;
         modifiedText = null;
         request++;
@@ -128,13 +140,38 @@ function XMLHttpRequest() {
         return originalOpen.apply(this, arguments);
     }
 
+    xhr.setRequestHeader = function (name, value) {
+        const result = originalSetHeader.apply(this, arguments)
+        if (browseUrl && /^(authorization|content-type|x-goog-(authuser|visitor-id|pageid)|x-youtube-(client-name|client-version|identity-token)|x-origin)$/i.test(name)) {
+            browseHeaders.append(name, value)
+        }
+        return result
+    }
+
     xhr.send = function (body) {
+        if (browseUrl && typeof body === 'string') requestInfo = { body, authenticated: browseHeaders.has('authorization') }
         for (let modifier of requestModifiers) {
             try {
-                body = modifier(url, body)
+                body = modifier(url, body, requestInfo)
             } catch (err) {
                 console.error('an xhr request modifier failed', err)
             }
+        }
+
+        if (requestInfo) {
+            const endpoint = browseUrl
+            const headers = browseHeaders
+            // Use the account of this Home request. Never expose its headers or follow redirects.
+            async function browse(context, browseId) {
+                const response = await pageFetch(endpoint, {
+                    method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
+                    headers, signal: AbortSignal.timeout(3000),
+                    body: JSON.stringify({ context, browseId })
+                })
+                if (response.ok) return response.json()
+            }
+            requestInfo.subscriptions = context => browse(context, 'FEsubscriptions')
+            requestInfo.channel = (context, id) => /^UC[\w-]{22}$/.test(id) ? browse(context, id) : undefined
         }
 
         if (!blocked) return originalSend.call(this, body); //synchronous like the real one, so errors are thrown to the caller

@@ -23,6 +23,9 @@
 
 ## Stable product and engineering invariants
 
+- Home combines the current TV profile's Subscriptions feed with YouTube discovery rows. Preserve long-press actions, local creator blocks (including on subscription uploads), and the separate UK discovery preference. Limit these changes to Home and its continuations. A channel's public country is the signal for creator ranking.
+- Keep four video thumbnails across a maximised Home shelf. Confirm a creator is unsubscribed before recommending their channel. The sidebar exposes Search, Home, Subscriptions, Library and Settings.
+
 - Preserve the YouTube Leanback experience and existing working TV-style navigation, controller support, keyboard shortcuts, playback features and settings unless the review explicitly changes them.
 - **Media remote focus rule:** hardware/system media actions (especially play/pause) must not control VacuumTube when its window is unfocused or minimized. They must work again after focus returns. Preserve the existing Media Session guard and add focused/unfocused regression tests when editing input handling.
 - **Focus is not pause:** ordinary playback may continue after the window loses focus; the optional `pause_on_blur` setting independently controls whether losing focus pauses playback. Do not conflate these behaviours.
@@ -45,7 +48,7 @@
 - Local setup: `npm ci`; launch during development: `npm start`; automated tests: `npm test` (Node's built-in test runner).
 - Local Windows x64 packaging: `npx electron-builder --win nsis --x64 --publish never`. Run on Windows with the locked dependencies; output goes to `dist/`.
 - CI workflow: **VacuumTube Windows installer** — `.github/workflows/windows-dev-build.yml`. Runs for `main` pushes, pull requests targeting `main`, and manual dispatch; uses Windows runners and Node.js 22.
-- CI checks: install dependencies; run tests; build the x64 NSIS installer; check `dist/VacuumTube-Setup.exe`, `dist/VacuumTube-Setup.exe.blockmap`, and `dist/latest.yml`. **These CI checks do not currently test the actual installer wizard, uninstall or hardware remote on a desktop.**
+- CI installs dependencies, runs tests, builds the x64 NSIS setup and validates the EXE, blockmap and update metadata. Its Windows smoke test silently installs over an existing copy, uninstalls and reinstalls, and checks a synthetic persistent cookie and local storage in the normal profile. Interactive wizard navigation, live YouTube sign-in and physical remotes require hands-on verification.
 - Publishing: successful `main` runs create GitHub **prereleases** tagged `vacuumtube-dev-<run_number>-<run_attempt>`. Release assets are the setup EXE, blockmap and `latest.yml`; CI retains only the newest **two** development releases.
 - Installation/update: download the matching, verified `VacuumTube-Setup.exe` asset from **this fork's** GitHub Releases, close VacuumTube and run its installer wizard. For test builds, use the explicit release asset rather than assuming the application's automatic updater will detect a same-version development build.
 - Rollback: identify the last tested-good GitHub release and download its installer **if that release is still retained**; reinstall it, checking existing preferences and playback. Because old development releases are pruned, preserve a known-good installer separately before risky iterations. Validate compatibility before changing persistent formats.
