@@ -32,8 +32,8 @@ if (portablePath) {
     userData = electron.app.getPath('userData')
 }
 
-const sessionData = path.join(userData, 'sessionData')
-electron.app.setPath('sessionData', sessionData)
+const { sessionPath, persistSession } = require('./session-profile')
+electron.app.setPath('sessionData', sessionPath(userData))
 
 const configManager = require('./config.js')
 const permissions = require('./permissions.js')
@@ -150,6 +150,7 @@ async function main() {
     await permissions.resetAfterUpdate({ appId, userData })
 
     await electron.app.whenReady()
+    persistSession(electron.app, electron.session.defaultSession)
 
     permissions.setup({ appId })
 

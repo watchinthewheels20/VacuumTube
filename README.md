@@ -80,8 +80,7 @@ VacuumTube has some settings that you can change, which are located in the YouTu
   - Removes \"Super resolution\" (AI upscaled) qualities from low quality videos
 - Hide Shorts
   - Hides YouTube Shorts from the homepage
-- Guide Tabs
-  - Allows you to choose which guide tabs are shown on the sidebar
+- The sidebar contains Search, Home, Subscriptions, Library and Settings.
 - Unlock Resolution
   - Removes monitor resolution cap and allows you to watch videos at any resolution
 - Filter Video Codecs
@@ -112,6 +111,18 @@ VacuumTube has some settings that you can change, which are located in the YouTu
   - Allows VacuumTube to be discovered by the YouTube mobile app on devices within the same local network (DIAL)
 - Automatic Updates
   - Download new versions in the background and install them when VacuumTube closes. When off, you can still check for updates from the About page
+
+## Home recommendations in this Windows fork
+
+Home video shelves fit four thumbnails across a maximised window. A flag on the thumbnail shows the channel's published country. A globe means the country is unavailable. Long-press **Hide this video** or **Mark as watched** to remove it from Home and close the gap. These are local feed preferences.
+
+**Suggested new creators** uses channels from your personalised discovery rows. VacuumTube checks subscription status before showing a suggestion. Select a creator to read the description, watch a sample video, browse the channel, subscribe or ignore future suggestions from that creator.
+
+For installer updates, close VacuumTube and run the new setup under the same Windows user. The installer keeps the browser profile under the user's application-data directory. Portable launches use the profile selected by the portable flag or marker.
+
+Home adds a **New from your subscriptions** row using the signed-in TV profile's Subscriptions feed. It checks when Home loads and every two minutes while Home is visible and idle. YouTube controls when uploads enter that feed, and creators can exclude an upload. Other Home rows continue to offer discovery. **Prefer UK creators** requests UK Home suggestions and gives channels that publicly list the United Kingdom priority within discovery rows. Channels without a published country remain eligible.
+
+Long-press a Home video (or press **Shift+Enter**) to open its action menu. **Why was this recommended to me?** explains where the card came from and any UK preference applied. **Never show me this creator again** hides that creator from Home, including subscription uploads. Manage hidden creators and the UK preference in **VacuumTube Settings → Appearance → Home recommendations**. Hidden creators are saved on this installation and shared by its TV profiles.
 
 ## Extra Input Mappings
 

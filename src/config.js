@@ -30,6 +30,11 @@ const defaults = { //mess
     dislikes: false, //readds youtube dislikes via https://www.returnyoutubedislike.com/
     remove_super_resolution: false, //block "super resolution" (ai upscaled qualities)
     hide_shorts: false, //hide youtube shorts from homepage
+    prefer_uk_creators: true,
+    home_blocked_creators: [],
+    home_hidden_videos: [],
+    home_watched_videos: [],
+    home_ignored_creators: [],
     block_continue_watching: false, //blocks the "Video paused. Continue watching?" prompt that appears after being idle for a while
     h264ify: false, // enable codec blocking feature 
     h264ify_disable_webm: true, //when h264ify is enabled, block webm container streams
@@ -96,7 +101,7 @@ function init(overrides = {}) {
             changed = true;
         }
 
-        console.log('[config] Loaded config', config)
+        console.log('[config] Loaded config')
     } else {
         console.log('[config] Initializing default config')
 

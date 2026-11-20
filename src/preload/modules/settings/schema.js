@@ -11,7 +11,6 @@ category and section titles come from settings.categories and settings.sections 
 const { ipcRenderer } = require('electron')
 const { SPONSORBLOCK_KEYS } = require('./pages/sponsorblock')
 const { CODEC_KEYS } = require('./pages/h264ify')
-const { GUIDE_TABS } = require('./pages/guide-tabs')
 
 function ratio(locale, on, total) {
     return locale.generic.ratio.replace('{on}', on).replace('{total}', total);
@@ -86,11 +85,7 @@ module.exports = (locale) => [
                 id: 'interface',
                 rows: [
                     { type: 'toggle', key: 'hide_shorts' },
-                    {
-                        type: 'link', page: 'guide_tabs',
-                        title: locale.guide_tabs.title,
-                        summary: (config) => ratio(locale, GUIDE_TABS.filter((tab) => !(config.disabled_tabs || []).includes(tab)).length, GUIDE_TABS.length)
-                    }
+                    { type: 'link', page: 'home_recommendations', title: locale.home_recommendations.title }
                 ]
             },
             {

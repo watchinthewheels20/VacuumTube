@@ -52,7 +52,8 @@ function popupMenu(options) {
                                         overlayPanelHeaderRenderer: {
                                             title: {
                                                 simpleText: options.title
-                                            }
+                                            },
+                                            subtitle: options.subtitle ? { simpleText: options.subtitle } : undefined
                                         }
                                     },
                                     content: {

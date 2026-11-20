@@ -56,6 +56,9 @@ jobs:
           $unexpected = @(Get-ChildItem dist -Recurse -File | Where-Object { $_.Extension -in @('.dmg','.deb','.AppImage','.zip') })
           if ($unexpected.Count) { throw "Unexpected packages: $($unexpected.Name -join ', ')" }
 
+      - name: Verify profile retention across Windows reinstalls
+        run: node scripts/installer-profile-smoke.mjs
+
       - name: Publish downloadable Windows installer release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         shell: pwsh

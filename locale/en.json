@@ -11,6 +11,31 @@
         }
     },
     "settings": {
+        "home_recommendations": {
+            "title": "Home recommendations",
+            "uploads": "New from your subscriptions",
+            "why": "Why was this recommended to me?",
+            "block": "Never show me this creator again",
+            "hide": "Hide this video",
+            "watched": "Mark as watched",
+            "creators": "Suggested new creators",
+            "ignore": "Ignore this creator",
+            "subscribe": "Subscribe",
+            "watch": "Watch a video",
+            "channel": "Browse channel",
+            "unknown_country": "Channel location unavailable",
+            "subscription_reason": "This upload appeared in your Subscriptions feed.",
+            "discovery_reason": "YouTube included this video in your Home recommendations.",
+            "shelf_reason": "YouTube included this video in “{shelf}” on Home.",
+            "done": "Done",
+            "uk_reason": "This channel lists the United Kingdom. Your Home settings give UK channels priority.",
+            "unknown_creator": "VacuumTube couldn't identify this creator. Try again later.",
+            "prefer_uk": "Prefer UK creators",
+            "prefer_uk_description": "Prioritise UK channels in Home discovery rows.",
+            "blocked": "Hidden creators",
+            "restore": "Show {creator} on Home again",
+            "empty": "No creators hidden on Home."
+        },
         "generic": {
             "title": "Settings",
             "description": "Opens the VacuumTube settings overlay. You can access this overlay anywhere by pressing Ctrl+O on your keyboard",
@@ -113,23 +138,6 @@
         "hide_shorts": {
             "title": "Hide Shorts",
             "description": "Hides YouTube Shorts from the homepage"
-        },
-        "guide_tabs": {
-            "title": "Guide Tabs",
-            "description": "Choose which sidebar guide tabs are shown. Turn a tab off to hide it. Relaunch after changing",
-            "tabs": {
-                "search": "Search",
-                "shorts": "Shorts",
-                "subscriptions": "Subscriptions",
-                "library": "Library",
-                "gaming": "Gaming",
-                "music": "Music",
-                "news": "News",
-                "podcasts": "Podcasts",
-                "movies_and_tv": "Movies & TV",
-                "live": "Live",
-                "sports": "Sports"
-            }
         },
         "unlock_resolution": {
             "title": "Unlock Resolution",
