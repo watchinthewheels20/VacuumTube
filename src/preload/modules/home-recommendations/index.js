@@ -5,7 +5,7 @@ const locale = require('../../util/localeProvider')
 const { toast, popupMenu } = require('../../util/ui')
 const feed = require('./feed')
 const { channelDirectory } = require('./channels')
-const { suggestedCreators, creatorTile } = require('./creators')
+const { discover, discoveryVideos, creatorTile } = require('./creators')
 const { decorateThumbnails } = require('./flags')
 
 const english = require('../../../../locale/en.json').settings.home_recommendations
@@ -29,13 +29,20 @@ module.exports = () => {
     let refreshTimer
     let latestUploads = new Set()
     let lastInteraction = 0
+    function getDirectory(version) {
+        if (!directory) {
+            const date = version?.match(/\b(20\d{6})\b/)?.[1] || new Date().toISOString().slice(0, 10).replaceAll('-', '')
+            directory = channelDirectory(window.fetch.bind(window), '2.' + date + '.00.00')
+        }
+        return directory
+    }
     if (typeof document !== 'undefined') {
         const startFlags = () => decorateThumbnails(async id => {
-            if (!cards.has(id) || !directory) return
-            const channel = cards.get(id).id || (await directory.owner(id))?.id
-            return channel && directory.country(channel)
-        }, () => labels().unknown_country)
-        if (document.documentElement) startFlags()
+            const publicData = getDirectory(window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION)
+            const channel = cards.get(id)?.id || (await publicData.owner(id))?.id
+            return channel && publicData.country(channel)
+        }, () => labels().unknown_country, () => !isKids())
+        if (document.readyState !== 'loading') startFlags()
         else window.addEventListener('DOMContentLoaded', startFlags, { once: true })
     }
     for (const type of ['keydown', 'pointerdown', 'wheel']) {
@@ -129,24 +136,24 @@ module.exports = () => {
         if (request.browseId === 'default' && json.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer?.targetId !== 'browse-feedFEtopics') return
         const generation = info.homeGeneration
         const home = request.browseId && feed.sectionList(json)
-        if (!directory) {
-            const date = request.context?.client?.clientVersion?.match(/\b(20\d{6})\b/)?.[1] || new Date().toISOString().slice(0, 10).replaceAll('-', '')
-            directory = channelDirectory(window.fetch.bind(window), '2.' + date + '.00.00')
-        }
+        getDirectory(request.context?.client?.clientVersion)
         const rows = feed.lists(json)
         const load = async () => {
             const subscriptions = await info.subscriptions(request.context)
             if (subscriptions?.contents) return feed.subscriptionList(subscriptions, config.hide_shorts)
         }
         const loadFirstPage = Array.isArray(home?.contents) && (info.authenticated || window.ytcfg?.data_?.LOGGED_IN !== false)
-        const [uploads] = await Promise.all([
+        const canDiscover = loadFirstPage && info.channel && info.related
+        const homeVideos = canDiscover ? discoveryVideos(home.contents) : []
+        const [uploads, history] = await Promise.all([
             loadFirstPage ? load().catch(() => undefined) : undefined,
+            canDiscover ? info.history(request.context).catch(() => undefined) : undefined,
             enrich(rows, config.prefer_uk_creators && source === 'home')
         ])
         const seen = new Set(request.continuation && source === 'home' ? latestUploads : [])
         const excluded = new Set([...(config.home_hidden_videos || []), ...(config.home_watched_videos || [])])
         const options = { seen, blocked: blocked(), excluded, details, labels: labels(), remember }
-        const subscribedCreators = uploads?.items.map(feed.video).filter(Boolean).map(details) || []
+        const uploadVideos = uploads?.items.map(feed.video).filter(Boolean) || []
         if (source === 'uploads') {
             if (!json.continuationContents) return
             const list = feed.subscriptionList(json, config.hide_shorts)
@@ -179,10 +186,14 @@ module.exports = () => {
             feed.rankList(row, 'home', { ...options, remember: (id, card) => remember(id, { ...card, shelf: titles.get(row) }) })
         }
         if (home && generation === homeGeneration) creators.clear()
-        if (loadFirstPage && info.channel) {
-            const suggestions = await suggestedCreators(rows, {
+        if (canDiscover && generation === homeGeneration) {
+            const discoveryContext = structuredClone(request.context)
+            if (config.prefer_uk_creators && discoveryContext.client) discoveryContext.client.gl = 'GB'
+            const suggestions = await discover({
+                history: discoveryVideos(history?.contents), uploads: uploadVideos, home: homeVideos,
+                related: id => info.related(discoveryContext, id),
                 details, owner: directory.owner, lookup: id => info.channel(request.context, id),
-                ignored: config.home_ignored_creators || [], blocked: [...options.blocked, ...subscribedCreators], excluded
+                ignored: config.home_ignored_creators || [], blocked: options.blocked, excluded
             }).catch(() => [])
             if (suggestions.length && generation === homeGeneration) {
                 for (const item of suggestions) creators.set(item.id, item)

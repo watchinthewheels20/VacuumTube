@@ -162,16 +162,19 @@ function XMLHttpRequest() {
             const endpoint = browseUrl
             const headers = browseHeaders
             // Use the account of this Home request. Never expose its headers or follow redirects.
-            async function browse(context, browseId) {
-                const response = await pageFetch(endpoint, {
+            async function read(context, params, url = endpoint) {
+                const response = await pageFetch(url, {
                     method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
                     headers, signal: AbortSignal.timeout(3000),
-                    body: JSON.stringify({ context, browseId })
+                    body: JSON.stringify({ context, ...params })
                 })
                 if (response.ok) return response.json()
             }
-            requestInfo.subscriptions = context => browse(context, 'FEsubscriptions')
-            requestInfo.channel = (context, id) => /^UC[\w-]{22}$/.test(id) ? browse(context, id) : undefined
+            requestInfo.subscriptions = context => read(context, { browseId: 'FEsubscriptions' })
+            requestInfo.history = context => read(context, { browseId: 'FEhistory' })
+            requestInfo.related = (context, videoId) => /^[\w-]{11}$/.test(videoId)
+                ? read(context, { videoId }, new URL('/youtubei/v1/next', endpoint)) : undefined
+            requestInfo.channel = (context, id) => /^UC[\w-]{22}$/.test(id) ? read(context, { browseId: id }) : undefined
         }
 
         if (!blocked) return originalSend.call(this, body); //synchronous like the real one, so errors are thrown to the caller

@@ -2,6 +2,8 @@ const channelId = /^UC[\w-]{22}$/
 const videoId = /^[\w-]{11}$/
 const homeIds = new Set(['default', 'FEtopics', 'FEwhat_to_watch'])
 const prefix = 'vacuumtube.home.'
+// Leanback's compact widescreen tile has a fixed native slot on focus and blur.
+const homeTileStyle = 'TILE_STYLE_YTLR_EDU'
 
 function feedSource(request) {
     if (homeIds.has(request?.browseId)) return 'home'
@@ -137,7 +139,10 @@ function rankList(list, source, { seen, blocked, excluded, details, labels, reme
         if (excluded?.has(tile.contentId) || seen.has(tile.contentId) || blocked.some(entry => matchesCreator(entry, info))) return false
         seen.add(tile.contentId)
         const nativeHide = addMenu(tile, labels)
-        if (tile.contentType === 'TILE_CONTENT_TYPE_VIDEO') tile.style = 'TILE_STYLE_YTLR_DEFAULT'
+        if (tile.contentType === 'TILE_CONTENT_TYPE_VIDEO') {
+            tile.style = homeTileStyle
+            delete tile.styling
+        }
         remember(tile.contentId, { ...info, source, nativeHide })
         videos.push({ item, priority: source === 'home' && info.uk ? 1 : 0 })
         return true
@@ -149,4 +154,4 @@ function rankList(list, source, { seen, blocked, excluded, details, labels, reme
     tagContinuations(list, source)
 }
 
-module.exports = { channelId, videoId, feedSource, prepareRequest, tagContinuations, sectionList, lists, video, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }
+module.exports = { channelId, videoId, homeTileStyle, feedSource, prepareRequest, tagContinuations, sectionList, lists, video, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }

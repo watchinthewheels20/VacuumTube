@@ -21,46 +21,39 @@ async function flagImage(country) {
     return assets.get(code)
 }
 
-// Leanback reuses thumbnail nodes while scrolling. Recheck their video ID after each lookup.
-function decorateThumbnails(lookup, unknownLabel) {
+// TV uses both CSS backgrounds and img elements, including alternate and live thumbnails.
+function thumbnailId(source) {
+    if (typeof source !== 'string') return
+    return source.match(/\/(?:vi(?:_webp)?|vi_live|an_webp|sb)\/([\w-]{11})(?:\/|[?#]|$)/)?.[1] ||
+        source.match(/[?&]videoID=([\w-]{11})(?:[&#"')]|$)/)?.[1]
+}
+
+function decorateThumbnails(lookup, unknownLabel, enabled) {
+    const selector = 'ytlr-tile-header-renderer, yt-lockup-view-model thumbnail, yt-thumbnail-view-model, ytlr-thumbnail-view-model'
+    const states = new Map()
     const visible = new Set()
-    const pending = new WeakMap()
     let active = 0
-    function onHome() {
-        const route = new URL(location.hash.slice(1) || '/', location.href)
-        return route.pathname === '/' || (route.pathname === '/browse' && ['FEtopics', 'FEwhat_to_watch'].includes(route.searchParams.get('c')))
+    let frame
+    function clear(host) {
+        states.get(host)?.badge.remove()
+        states.delete(host)
     }
-    function videoId(img) {
-        if (!onHome()) return
-        const source = img.src || img.style.backgroundImage || ''
-        return source.match(/\/(?:vi(?:_webp)?|an_webp)\/([\w-]{11})\//)?.[1] ||
-            source.match(/[?&]videoID=([\w-]{11})\b/)?.[1]
-    }
-    async function render(img, id) {
-        const country = await lookup(id)
-        const image = await flagImage(country)
-        if (!img.isConnected || videoId(img) !== id || pending.get(img) !== id) return
-        const host = img.closest('ytlr-tile-header-renderer') || img.parentElement
-        host.querySelector(':scope > .vt-origin-flag')?.remove()
-        if (getComputedStyle(host).position === 'static') host.style.position = 'relative'
-        const badge = document.createElement('span')
-        badge.className = 'vt-origin-flag'
-        badge.setAttribute('role', 'img')
-        badge.title = country || unknownLabel()
-        badge.setAttribute('aria-label', badge.title)
+    function update(badge, label, image) {
+        badge.title = label
+        badge.setAttribute('aria-label', label)
         if (image) badge.style.backgroundImage = 'url("' + image + '")'
-        else badge.textContent = '🌐'
-        host.appendChild(badge)
     }
     function pump() {
-        for (const img of visible) {
-            if (!img.isConnected) { visible.delete(img); continue }
+        for (const host of visible) {
             if (active >= 3) break
-            const id = videoId(img)
-            if (!id || pending.get(img) === id) continue
-            pending.set(img, id)
+            const state = states.get(host)
+            if (!state?.id || state.started) continue
+            state.started = true
             active++
-            render(img, id).catch(() => {}).finally(() => { active--; pump() })
+            Promise.resolve().then(() => lookup(state.id)).then(async country => {
+                const image = await flagImage(country)
+                if (image && host.isConnected && states.get(host) === state) update(state.badge, country, image)
+            }).catch(() => {}).finally(() => { active--; pump() })
         }
     }
     const observer = new IntersectionObserver(entries => {
@@ -70,68 +63,60 @@ function decorateThumbnails(lookup, unknownLabel) {
         }
         pump()
     })
-    const selector = 'ytlr-tile-renderer ytlr-thumbnail-details, ytlr-tile-renderer img'
-    let layoutFrame
-    function fitRows() {
-        layoutFrame = undefined
-        for (const row of document.querySelectorAll('ytlr-shelf-renderer ytlr-horizontal-list-renderer')) {
-            const list = row.querySelector('yt-virtual-list')
-            if (!list) continue
-            if (!onHome()) {
-                list.classList.remove('vt-four-across')
+    function scan() {
+        frame = undefined
+        const hosts = new Set(enabled() ? document.querySelectorAll(selector) : [])
+        for (const host of states.keys()) {
+            if (hosts.has(host)) continue
+            clear(host)
+            observer.unobserve(host)
+            visible.delete(host)
+        }
+        for (const host of hosts) {
+            // A lockup can nest a thumbnail view model inside a tile header.
+            if (host.parentElement?.closest(selector)) continue
+            let id
+            for (const image of host.querySelectorAll('ytlr-thumbnail-details, img, image, [style*="background-image"]')) {
+                id = thumbnailId(image.currentSrc) || thumbnailId(image.src) || thumbnailId(image.style.backgroundImage)
+                if (id) break
+            }
+            const video = id || host.querySelector('ytlr-thumbnail-overlay-time-status-renderer, yt-thumbnail-bottom-overlay-view-model')
+            const old = states.get(host)
+            if (old && video && old.id === id) {
+                if (old.badge.parentElement !== host) host.appendChild(old.badge)
                 continue
             }
-            const tiles = list.querySelectorAll('ytlr-tile-renderer')
-            if (!tiles.length) continue
-            // Leanback positions virtual slots in rem. Scale the whole track so scrolling
-            // and focus use the same geometry as the thumbnails and captions.
-            const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
-            const first = tiles[0].parentElement
-            const position = slot => new DOMMatrixReadOnly(getComputedStyle(slot).transform).m41
-            const width = tiles[0].offsetWidth
-            const step = tiles[1] ? Math.abs(position(tiles[1].parentElement) - position(first)) : width + 1.5 * rem
-            if (!width || !step) continue
-            const available = row.clientWidth - 8 * rem
-            const scale = available / (3 * step + width)
-            if (!(scale > 0 && scale < 2)) continue
-            list.style.setProperty('--vt-row-scale', scale.toFixed(4))
-            list.style.setProperty('--vt-row-indent', (6.5 * (1 - scale)).toFixed(4) + 'rem')
-            list.classList.add('vt-four-across')
-        }
-    }
-    function scheduleLayout() {
-        if (layoutFrame === undefined) layoutFrame = requestAnimationFrame(fitRows)
-    }
-    window.addEventListener('resize', scheduleLayout)
-    window.addEventListener('hashchange', scheduleLayout)
-    function register(node) {
-        if (node.nodeType !== 1) return
-        if (node.matches(selector)) observer.observe(node)
-        node.querySelectorAll(selector).forEach(img => observer.observe(img))
-    }
-    const changes = new MutationObserver(records => {
-        for (const record of records) {
-            if (record.type === 'attributes') {
-                const img = record.target
-                if (!img.matches(selector)) continue
-                const host = img.closest('ytlr-tile-header-renderer') || img.parentElement
-                host?.querySelector(':scope > .vt-origin-flag')?.remove()
-                pending.delete(img)
-                observer.observe(img)
-            } else {
-                record.addedNodes.forEach(register)
-                for (const node of record.removedNodes) {
-                    if (node.nodeType !== 1 || node.isConnected) continue
-                    const images = node.matches('img, ytlr-thumbnail-details') ? [node] : node.querySelectorAll('img, ytlr-thumbnail-details')
-                    for (const img of images) { observer.unobserve(img); visible.delete(img); pending.delete(img) }
-                }
-                scheduleLayout()
+            if (old) clear(host)
+            if (!video) {
+                observer.unobserve(host)
+                visible.delete(host)
+                continue
             }
+            const badge = document.createElement('span')
+            badge.className = 'vt-origin-flag'
+            badge.setAttribute('role', 'img')
+            if (getComputedStyle(host).position === 'static') host.style.position = 'relative'
+            const state = { id, badge }
+            states.set(host, state)
+            update(badge, unknownLabel())
+            host.appendChild(badge)
+            observer.observe(host)
         }
         pump()
-    })
-    register(document.documentElement)
-    scheduleLayout()
-    changes.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'style'] })
+    }
+    function schedule() {
+        if (frame === undefined) frame = requestAnimationFrame(scan)
+    }
+    new MutationObserver(records => {
+        if (frame !== undefined) return
+        for (const record of records) {
+            if (record.target.closest?.(selector)) return schedule()
+            if (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(node =>
+                node.nodeType === 1 && (node.matches(selector) || node.querySelector(selector)))) return schedule()
+        }
+    }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'style'] })
+    window.addEventListener('hashchange', schedule)
+    schedule()
 }
-module.exports = { decorateThumbnails }
+
+module.exports = { decorateThumbnails, thumbnailId }

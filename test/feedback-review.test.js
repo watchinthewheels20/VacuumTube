@@ -5,7 +5,9 @@ const path = require('node:path')
 const os = require('node:os')
 const { sessionPath } = require('../src/session-profile')
 const { rankList } = require('../src/preload/modules/home-recommendations/feed')
-const { suggestion, suggestedCreators } = require('../src/preload/modules/home-recommendations/creators')
+const { suggestion, suggestedCreators, discover, discoveryVideos, creatorTile } = require('../src/preload/modules/home-recommendations/creators')
+const { homeTileStyle, creator } = require('../src/preload/modules/home-recommendations/feed')
+const { thumbnailId, decorateThumbnails } = require('../src/preload/modules/home-recommendations/flags')
 const labels = require('../locale/en.json').settings.home_recommendations
 const { filterGuide } = require('../src/preload/modules/sidebar')
 const channel = 'UC' + 'a'.repeat(22)
@@ -61,8 +63,91 @@ test('creator cards require an explicit unsubscribed state and an action for the
     assert.equal(suggestion(reply, channel, sample.tileRenderer), undefined)
     button.subscribed = false
     const options = { details: () => ({ id: channel }), lookup: async () => reply, blocked: [], ignored: [], excluded: new Set() }
-    const rows = [{ items: [sample, sample] }]
-    assert.equal((await suggestedCreators(rows, options)).length, 1)
-    assert.deepEqual(await suggestedCreators(rows, { ...options, ignored: [channel] }), [])
-    assert.deepEqual(await suggestedCreators(rows, { ...options, blocked: [{ id: channel }] }), [])
+    const tiles = [sample.tileRenderer, sample.tileRenderer]
+    assert.equal((await suggestedCreators(tiles, options)).length, 1)
+    assert.deepEqual(await suggestedCreators(tiles, { ...options, ignored: [channel] }), [])
+    assert.deepEqual(await suggestedCreators(tiles, { ...options, blocked: [{ id: channel }] }), [])
+})
+
+test('Home uses a fixed native widescreen slot for video and creator cards, including restyled uploads', () => {
+    for (const source of ['home', 'uploads']) {
+        const item = video('a'.repeat(11))
+        item.tileRenderer.styling = { scale: 'TILE_SCALE_XL' }
+        rankList({ items: [item] }, source, { seen: new Set(), blocked: [], details: () => ({}), labels, remember() {} })
+        assert.equal(item.tileRenderer.style, 'TILE_STYLE_YTLR_EDU')
+        assert.equal(item.tileRenderer.styling, undefined)
+    }
+    assert.equal(creatorTile({ id: channel }).tileRenderer.style, homeTileStyle)
+})
+
+test('thumbnail identity works for stills, live video, previews, storyboards and DeArrow', () => {
+    const id = 'video-123_4'
+    for (const path of ['vi', 'vi_webp', 'vi_live', 'an_webp', 'sb']) {
+        assert.equal(thumbnailId('url("https://i.ytimg.com/' + path + '/' + id + '/frame.jpg")'), id)
+    }
+    assert.equal(thumbnailId('url("https://dearrow-thumb.ajay.app/api/v1/getThumbnail?videoID=' + id + '")'), id)
+    assert.equal(thumbnailId('https://yt3.ggpht.com/a-channel-avatar'), undefined)
+})
+
+test('a recycled thumbnail gets its globe immediately and keeps it when the old country arrives late', async t => {
+    let frame, mutate, intersect
+    let source = '/vi/11111111111/default.jpg'
+    const pending = new Map()
+    t.mock.method(fs.promises, 'readFile', async () => 'fixture')
+    const host = { isConnected: true, style: {}, querySelectorAll: () => [{ src: source, style: {} }],
+        appendChild(badge) { this.badge = badge; badge.parentElement = this } }
+    const doc = { documentElement: {}, querySelectorAll: () => [host], createElement: () => ({
+        style: {}, setAttribute() {}, remove() { this.parentElement = null }
+    }) }
+    const globals = { document: doc, window: new EventTarget(), getComputedStyle: () => ({ position: 'relative' }),
+        requestAnimationFrame(fn) { frame = fn; return 1 },
+        IntersectionObserver: class { constructor(fn) { intersect = fn } observe() {} unobserve() {} },
+        MutationObserver: class { constructor(fn) { mutate = fn } observe() {} } }
+    for (const [key, value] of Object.entries(globals)) {
+        global[key] = value
+        t.after(() => { delete global[key] })
+    }
+    decorateThumbnails(id => new Promise(resolve => pending.set(id, resolve)), () => 'Unknown', () => true)
+    frame()
+    assert.equal(host.badge.title, 'Unknown')
+    intersect([{ target: host, isIntersecting: true }])
+    await Promise.resolve()
+    const original = host.badge
+    source = '/vi/22222222222/default.jpg'
+    mutate([{ type: 'attributes', target: { closest: () => host } }])
+    frame()
+    await Promise.resolve()
+    assert.notEqual(host.badge, original)
+    pending.get('11111111111')('United Kingdom')
+    pending.get('22222222222')(undefined)
+    await new Promise(resolve => setImmediate(resolve))
+    // A native render can discard the decoration without changing its video.
+    host.badge.remove()
+    mutate([{ type: 'childList', target: { closest: () => host } }])
+    frame()
+    assert.equal(host.badge.parentElement, host)
+    assert.equal(host.badge.title, 'Unknown')
+})
+
+test('new creators come from related videos and exclude Home, subscriptions, history, hidden and ignored choices', async () => {
+    const channelId = n => 'UC' + n.repeat(22)
+    const tile = (n, by) => ({ ...video(n.repeat(11)).tileRenderer, shortBylineText: { runs: [{
+        text: by, navigationEndpoint: { browseEndpoint: { browseId: channelId(by) } }
+    }] } })
+    const history = discoveryVideos({ items: [{ lockupViewModel: { contentType: 'LOCKUP_CONTENT_TYPE_VIDEO', contentId: '1'.repeat(11),
+        metadata: { lockupMetadataViewModel: { metadata: { contentMetadataViewModel: { metadataRows: [{ metadataParts: [{ text: { content: 'a' } }] }] } } } }
+    } }] })
+    const seeds = []
+    const candidates = [tile('4','a'), tile('5','b'), tile('6','c'), tile('7','d'), tile('8','e'), tile('9','f'), tile('0','g')]
+    const options = { history, uploads: [tile('2','b')], home: [tile('3','c')], details: creator, owner: async () => undefined,
+        ignored: [channelId('d')], blocked: [{ id: channelId('e') }], excluded: new Set(['9'.repeat(11)]),
+        related: async id => {
+            seeds.push(id)
+            return { contents: { singleColumnWatchNextResults: { pivot: { items: candidates.map(tileRenderer => ({ tileRenderer })) } } } }
+        }, lookup: async id => ({ header: { channelHeaderRenderer: { title: { simpleText: 'A new creator' },
+            selectableDescription: { selectableTextRenderer: { compactDescription: { simpleText: 'Channel description' } } },
+            buttons: [{ subscribeButtonRenderer: { channelId: id, subscribed: false, serviceEndpoints: [{ subscribeEndpoint: { channelIds: [id] } }] } }] } } }) }
+    assert.deepEqual((await discover(options)).map(c => c.id), [channelId('g')])
+    assert.deepEqual(seeds, ['1','2','3'].map(n => n.repeat(11)))
+    assert.deepEqual(await discover({ ...options, related: async () => { throw Error('offline') } }), [])
 })
