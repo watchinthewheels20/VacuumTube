@@ -7,8 +7,18 @@ const { sessionPath } = require('../src/session-profile')
 const { rankList } = require('../src/preload/modules/home-recommendations/feed')
 const { suggestion, suggestedCreators } = require('../src/preload/modules/home-recommendations/creators')
 const labels = require('../locale/en.json').settings.home_recommendations
+const { filterGuide } = require('../src/preload/modules/sidebar')
 const channel = 'UC' + 'a'.repeat(22)
 const video = id => ({ tileRenderer: { contentType: 'TILE_CONTENT_TYPE_VIDEO', contentId: id, onSelectCommand: { watchEndpoint: { videoId: id } } } })
+
+test('guide filtering covers the main section, account bar and Settings footer', () => {
+    const section = icons => ({ guideSectionRenderer: { items: icons.map(iconType => ({ guideEntryRenderer: { icon: { iconType } } })) } })
+    const json = { items: [section(['SEARCH', 'WHAT_TO_WATCH', 'SUBSCRIPTIONS', 'TAB_LIBRARY', 'NEWS'])],
+        topbar: section(['SIGN_IN']), footer: section(['SETTINGS', 'UNKNOWN']) }
+    filterGuide(json)
+    const icons = [json.topbar, ...json.items, json.footer].flatMap(group => group.guideSectionRenderer.items.map(row => row.guideEntryRenderer.icon.iconType))
+    assert.deepEqual(icons, ['SEARCH', 'WHAT_TO_WATCH', 'SUBSCRIPTIONS', 'TAB_LIBRARY', 'SETTINGS'])
+})
 
 test('reinstalls prefer the established session and retain a legacy root profile in place', t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vacuumtube-profile-'))

@@ -1,8 +1,6 @@
-const { addResponseModifier } = require('../util/xhrModifiers')
-
 function filterGuide(json) {
-    for (const section of json.items || []) {
-        const guide = section.guideSectionRenderer
+    for (const section of [...(json.items || []), json.topbar, json.footer]) {
+        const guide = section?.guideSectionRenderer
         if (!Array.isArray(guide?.items)) continue
         guide.items = guide.items.filter(item => {
             const entry = item.guideEntryRenderer
@@ -15,6 +13,7 @@ function filterGuide(json) {
     return json
 }
 
-module.exports = () => addResponseModifier((url, text) => {
+module.exports = () => require('../util/xhrModifiers').addResponseModifier((url, text) => {
     if (/^(?:https:\/\/www\.youtube\.com)?\/youtubei\/v1\/guide(?:\?|$)/.test(url)) return JSON.stringify(filterGuide(JSON.parse(text)))
 })
+module.exports.filterGuide = filterGuide
