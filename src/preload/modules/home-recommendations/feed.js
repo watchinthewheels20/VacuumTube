@@ -2,29 +2,36 @@ const channelId = /^UC[\w-]{22}$/
 const videoId = /^[\w-]{11}$/
 const homeIds = new Set(['default', 'FEtopics', 'FEwhat_to_watch'])
 const prefix = 'vacuumtube.home.'
+const regionalHomes = { UK: 'FEvacuumtube_uk', EU: 'FEvacuumtube_eu' }
+const continuationTag = /^vacuumtube\.home\.(home|uploads)\.(?:(UK|EU)\.)?/
 // Leanback's compact widescreen tile has a fixed native slot on focus and blur.
 const homeTileStyle = 'TILE_STYLE_YTLR_EDU'
 
 function feedSource(request) {
-    if (homeIds.has(request?.browseId)) return 'home'
-    for (const source of ['home', 'uploads']) {
-        if (request?.continuation?.startsWith(prefix + source + '.')) return source
-    }
+    if (homeIds.has(request?.browseId) || regionFor(request)) return continuationTag.exec(request?.continuation)?.[1] || 'home'
+    return continuationTag.exec(request?.continuation)?.[1]
+}
+
+function regionFor(request) {
+    return Object.keys(regionalHomes).find(region => regionalHomes[region] === request?.browseId) ||
+        continuationTag.exec(request?.continuation)?.[2]
 }
 
 function prepareRequest(request, preferUK) {
     const source = feedSource(request)
     if (!source) return false
-    if (request.continuation) request.continuation = request.continuation.slice((prefix + source + '.').length)
-    if (preferUK && source === 'home' && request.context?.client) request.context.client.gl = 'GB'
+    const region = regionFor(request)
+    if (request.continuation) request.continuation = request.continuation.replace(continuationTag, '')
+    if (region && request.browseId) request.browseId = 'FEtopics'
+    if (source === 'home' && request.context?.client && (region || preferUK)) request.context.client.gl = region === 'EU' ? 'FR' : 'GB'
     return true
 }
 
-function tagContinuations(renderer, source) {
+function tagContinuations(renderer, source, region) {
     for (const entry of renderer?.continuations || []) {
         const data = entry.nextContinuationData || entry.reloadContinuationData
         if (typeof data?.continuation === 'string' && !data.continuation.startsWith(prefix)) {
-            data.continuation = prefix + source + '.' + data.continuation
+            data.continuation = prefix + source + '.' + (region ? region + '.' : '') + data.continuation
         }
     }
 }
@@ -60,6 +67,30 @@ function video(item) {
     return tile
 }
 
+function lockupTile(lockup, menu) {
+    if (lockup?.contentType !== 'LOCKUP_CONTENT_TYPE_VIDEO' || !videoId.test(lockup.contentId)) return
+    const metadata = lockup.metadata?.lockupMetadataViewModel
+    const lines = metadata?.metadata?.contentMetadataViewModel?.metadataRows?.map(row => ({ lineRenderer: {
+        items: (row.metadataParts || []).map(part => ({ lineItemRenderer: { text: { runs: [{
+            text: part.text?.content || '', navigationEndpoint: part.text?.commandRuns?.[0]?.onTap?.innertubeCommand
+        }] } } }))
+    } }))
+    return {
+        contentId: lockup.contentId, contentType: 'TILE_CONTENT_TYPE_VIDEO', style: homeTileStyle,
+        onSelectCommand: lockup.rendererContext?.commandContext?.onTap?.innertubeCommand || { watchEndpoint: { videoId: lockup.contentId } },
+        onLongPressCommand: menu && { showMenuCommand: { menu: { menuRenderer: menu }, contentId: lockup.contentId,
+            title: { simpleText: metadata?.title?.content } } },
+        metadata: { tileMetadataRenderer: { title: { simpleText: metadata?.title?.content }, lines } },
+        header: { tileHeaderRenderer: { thumbnail: { thumbnails: lockup.contentImage?.thumbnailViewModel?.image?.sources || [] } } }
+    }
+}
+
+function watchedMenu(items, id, label) {
+    if (!Array.isArray(items) || !videoId.test(id) || items.some(item => item.menuNavigationItemRenderer?.navigationEndpoint?.vtHomeAction === 'watched')) return
+    items.push({ menuNavigationItemRenderer: { text: { simpleText: label }, navigationEndpoint: { vtHomeAction: 'watched', videoId: id } } })
+    return true
+}
+
 function text(value) {
     return value?.simpleText || value?.runs?.map(run => run.text).join('') || ''
 }
@@ -82,7 +113,7 @@ function matchesCreator(a, b) {
 }
 
 function addMenu(tile, labels) {
-    if (!tile.onLongPressCommand) tile.onLongPressCommand = { showMenuCommand: {
+    if (!tile.onLongPressCommand?.showMenuCommand) tile.onLongPressCommand = { showMenuCommand: {
         contentId: tile.contentId, title: tile.metadata?.tileMetadataRenderer?.title,
         thumbnail: tile.header?.tileHeaderRenderer?.thumbnail, menu: { menuRenderer: { items: [] } }
     } }
@@ -100,13 +131,14 @@ function addMenu(tile, labels) {
             break
         }
     }
-    for (const [action, title] of [['why', labels.why], ['block', labels.block], ['hide', labels.hide], ['watched', labels.watched]]) {
+    for (const [action, title] of [['why', labels.why], ['block', labels.block], ['hide', labels.hide]]) {
         if (action === 'hide' && nativeHide) continue
         items.push({ menuNavigationItemRenderer: {
             text: { runs: [{ text: title }] },
             navigationEndpoint: { vtHomeAction: action, videoId: tile.contentId }
         } })
     }
+    watchedMenu(items, tile.contentId, labels.watched)
     return nativeHide
 }
 
@@ -130,7 +162,7 @@ function subscriptionShelf(list, title) {
 }
 
 // Move UK choices into the existing video slots; leave other tile types in place.
-function rankList(list, source, { seen, blocked, excluded, details, labels, remember }) {
+function rankList(list, source, { seen, blocked, excluded, details, labels, remember, region }) {
     const videos = []
     list.items = list.items.filter(item => {
         const tile = video(item)
@@ -151,7 +183,7 @@ function rankList(list, source, { seen, blocked, excluded, details, labels, reme
     if (videos.length) list.visibleItemCount = 4
     let index = 0
     list.items = list.items.map(item => video(item) ? videos[index++].item : item)
-    tagContinuations(list, source)
+    tagContinuations(list, source, region)
 }
 
-module.exports = { channelId, videoId, homeTileStyle, feedSource, prepareRequest, tagContinuations, sectionList, lists, video, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }
+module.exports = { channelId, videoId, homeTileStyle, regionalHomes, regionFor, feedSource, prepareRequest, tagContinuations, sectionList, lists, video, lockupTile, watchedMenu, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }

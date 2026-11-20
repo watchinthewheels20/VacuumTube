@@ -172,6 +172,7 @@ function XMLHttpRequest() {
             }
             requestInfo.subscriptions = context => read(context, { browseId: 'FEsubscriptions' })
             requestInfo.history = context => read(context, { browseId: 'FEhistory' })
+            requestInfo.continuation = (context, continuation) => read(context, { continuation })
             requestInfo.related = (context, videoId) => /^[\w-]{11}$/.test(videoId)
                 ? read(context, { videoId }, new URL('/youtubei/v1/next', endpoint)) : undefined
             requestInfo.channel = (context, id) => /^UC[\w-]{22}$/.test(id) ? read(context, { browseId: id }) : undefined

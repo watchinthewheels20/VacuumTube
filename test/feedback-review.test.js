@@ -10,6 +10,8 @@ const { homeTileStyle, creator } = require('../src/preload/modules/home-recommen
 const { thumbnailId, decorateThumbnails } = require('../src/preload/modules/home-recommendations/flags')
 const labels = require('../locale/en.json').settings.home_recommendations
 const { filterGuide } = require('../src/preload/modules/sidebar')
+const { regionalRows, matchesRegion } = require('../src/preload/modules/home-recommendations/regions')
+const feed = require('../src/preload/modules/home-recommendations/feed')
 const channel = 'UC' + 'a'.repeat(22)
 const video = id => ({ tileRenderer: { contentType: 'TILE_CONTENT_TYPE_VIDEO', contentId: id, onSelectCommand: { watchEndpoint: { videoId: id } } } })
 
@@ -20,6 +22,40 @@ test('guide filtering covers the main section, account bar and Settings footer',
     filterGuide(json)
     const icons = [json.topbar, ...json.items, json.footer].flatMap(group => group.guideSectionRenderer.items.map(row => row.guideEntryRenderer.icon.iconType))
     assert.deepEqual(icons, ['SEARCH', 'WHAT_TO_WATCH', 'SUBSCRIPTIONS', 'TAB_LIBRARY', 'SETTINGS'])
+})
+
+test('regional entries send native Home and preserve the filter on continuation requests', () => {
+    const json = { items: [{ guideSectionRenderer: { items: [{ guideEntryRenderer: {
+        navigationEndpoint: { browseEndpoint: { browseId: 'FEtopics' } }
+    } }] } }] }
+    filterGuide(json, true)
+    const [, uk, eu] = json.items[0].guideSectionRenderer.items
+    for (const [item, region, market] of [[uk, 'UK', 'GB'], [eu, 'EU', 'FR']]) {
+        const request = { ...item.guideEntryRenderer.navigationEndpoint.browseEndpoint, context: { client: {} } }
+        assert.equal(feed.regionFor(request), region)
+        assert.equal(feed.prepareRequest(request, false), true)
+        assert.equal(request.browseId, 'FEtopics')
+        assert.equal(request.context.client.gl, market)
+        const list = { continuations: [{ nextContinuationData: { continuation: 'opaque' } }] }
+        feed.tagContinuations(list, 'uploads', region)
+        assert.equal(feed.regionFor(list.continuations[0].nextContinuationData), region)
+        assert.equal(feed.feedSource(list.continuations[0].nextContinuationData), 'uploads')
+    }
+})
+
+test('regional shelves exclude unknown countries and replenish from matching continuation videos', async () => {
+    const ids = ['1','2','3','4','5','6'].map(n => n.repeat(11))
+    const country = new Map(ids.map((id, index) => [id, [undefined, 'United States', 'United Kingdom', 'France', 'Norway', 'United Kingdom'][index]]))
+    const list = { items: ids.slice(0, 3).map(video), continuations: [{ nextContinuationData: { continuation: 'later' } }] }
+    await regionalRows([list], { region: 'EU', lookup: async tile => country.get(tile.contentId), continuation: async token => {
+        assert.equal(token, 'later')
+        return { continuationContents: { horizontalListContinuation: { items: ids.slice(3).map(video) } } }
+    } })
+    assert.deepEqual(list.items.map(item => item.tileRenderer.contentId), ids.slice(2))
+    assert.equal(list.continuations, undefined)
+    assert.equal(matchesRegion('GB', 'UK'), true)
+    assert.equal(matchesRegion('France', 'UK'), false)
+    assert.equal(matchesRegion(undefined, 'EU'), false)
 })
 
 test('reinstalls prefer the established session and retain a legacy root profile in place', t => {

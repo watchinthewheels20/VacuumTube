@@ -108,7 +108,7 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
         '../../util/xhrModifiers': { addRequestModifier: fn => { hooks.send = fn }, addResponseModifier: fn => { hooks.receive = fn } },
         '../../util/resolveCommandModifiers': { addInputModifier: fn => { hooks.action = fn }, resolveCommand: cmd => commands.push(cmd) },
         '../../util/localeProvider': { getLocale: () => undefined },
-        '../../util/ui': { popupMenu: options => { panels.push(options); return { openPopupAction: {} } } }
+        '../../util/ui': { toast() {}, popupMenu: options => { panels.push(options); return { openPopupAction: {} } } }
     }
     const originalLoad = Module._load
     t.mock.method(Module, '_load', function (name, ...args) { return mocks[name] || originalLoad.call(this, name, ...args) })
@@ -146,7 +146,11 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     assert.equal(commands.at(-1).browseEndpoint.browseId, 'FEtopics')
     const refreshed = await browse({ browseId: 'FEtopics' })
     assert.deepEqual(feed.lists(refreshed.json).flatMap(row => row.items.map(i => i.tileRenderer.contentId)), [second])
-    assert.equal((await browse({ browseId: 'FEsubscriptions' })).json, undefined)
+    const native = feed.lists((await browse({ browseId: 'FEsubscriptions' })).json)[0].items[0].tileRenderer
+    assert.deepEqual(native.onLongPressCommand.showMenuCommand.menu.menuRenderer.items.map(entry =>
+        entry.menuNavigationItemRenderer.navigationEndpoint.vtHomeAction), [undefined, 'watched'])
+    hooks.action(action(native, 1))
+    assert.deepEqual(config.home_watched_videos, [first])
     assert.equal((await browse({ browseId: 'FEtopics', context: { client: { clientName: 'TVHTML5_FOR_KIDS' } } })).json, undefined)
     assert.equal(requests, 2)
     const offline = await browse({ browseId: 'FEtopics' }, home, async () => { throw Error('offline') })

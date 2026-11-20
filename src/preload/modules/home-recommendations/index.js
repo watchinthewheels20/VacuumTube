@@ -4,9 +4,10 @@ const commands = require('../../util/resolveCommandModifiers')
 const locale = require('../../util/localeProvider')
 const { toast, popupMenu } = require('../../util/ui')
 const feed = require('./feed')
-const { channelDirectory } = require('./channels')
+const { channelDirectory, findField } = require('./channels')
 const { discover, discoveryVideos, creatorTile } = require('./creators')
 const { decorateThumbnails } = require('./flags')
+const { matchesRegion, regionalRows } = require('./regions')
 
 const english = require('../../../../locale/en.json').settings.home_recommendations
 const labels = () => locale.getLocale()?.settings.home_recommendations || english
@@ -19,6 +20,31 @@ function isKids(request) {
     return request?.context?.client?.clientName === 'TVHTML5_FOR_KIDS' || window.ytcfg?.data_?.INNERTUBE_CLIENT_NAME === 'TVHTML5_FOR_KIDS'
 }
 
+function addWatchedMenus(node, label) {
+    if (!node || typeof node !== 'object') return
+    const tile = feed.video(node)
+    const lockup = node.lockupViewModel
+    if (tile) {
+        tile.onLongPressCommand ||= { showMenuCommand: {
+            contentId: tile.contentId, title: tile.metadata?.tileMetadataRenderer?.title,
+            thumbnail: tile.header?.tileHeaderRenderer?.thumbnail, menu: { menuRenderer: { items: [] } }
+        } }
+        return feed.watchedMenu(findField(tile.onLongPressCommand, 'menuRenderer')?.items, tile.contentId, label)
+    } else if (lockup?.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO') {
+        lockup.rendererContext ||= {}
+        const context = lockup.rendererContext.commandContext ||= {}
+        context.onLongPress ||= { innertubeCommand: { showMenuCommand: {
+            contentId: lockup.contentId, title: { simpleText: lockup.metadata?.lockupMetadataViewModel?.title?.content },
+            menu: { menuRenderer: { items: [] } }
+        } } }
+        return feed.watchedMenu(findField(context.onLongPress, 'menuRenderer')?.items, lockup.contentId, label)
+    } else {
+        let changed = false
+        for (const child of Object.values(node)) if (addWatchedMenus(child, label)) changed = true
+        return changed
+    }
+}
+
 module.exports = () => {
     const config = configManager.get()
     const cards = new Map()
@@ -28,7 +54,17 @@ module.exports = () => {
     let homeGeneration = 0
     let refreshTimer
     let latestUploads = new Set()
+    let currentHome
     let lastInteraction = 0
+    function onHomeRoute() {
+        const hash = window.location?.hash || ''
+        const route = new URLSearchParams(hash.split('?')[1])
+        const browseId = route.get('c')
+        return /^(?:#\/?)?$/.test(hash) || Boolean(feed.feedSource({ browseId }))
+    }
+    function updateHomeLayout() {
+        document.documentElement.classList.toggle('vt-compact-home', onHomeRoute() && !isKids())
+    }
     function getDirectory(version) {
         if (!directory) {
             const date = version?.match(/\b(20\d{6})\b/)?.[1] || new Date().toISOString().slice(0, 10).replaceAll('-', '')
@@ -41,9 +77,15 @@ module.exports = () => {
             const publicData = getDirectory(window.ytcfg?.data_?.INNERTUBE_CLIENT_VERSION)
             const channel = cards.get(id)?.id || (await publicData.owner(id))?.id
             return channel && publicData.country(channel)
-        }, () => labels().unknown_country, () => !isKids())
-        if (document.readyState !== 'loading') startFlags()
-        else window.addEventListener('DOMContentLoaded', startFlags, { once: true })
+        }, () => labels().unknown_country, () => !isKids(), id =>
+            directory?.knownCountry(cards.get(id)?.id || directory.knownOwner(id)?.id))
+        const start = () => {
+            startFlags()
+            updateHomeLayout()
+            window.addEventListener('hashchange', updateHomeLayout)
+        }
+        if (document.readyState !== 'loading') start()
+        else window.addEventListener('DOMContentLoaded', start, { once: true })
     }
     for (const type of ['keydown', 'pointerdown', 'wheel']) {
         window.addEventListener(type, () => { lastInteraction = Date.now() }, { passive: true, capture: true })
@@ -122,22 +164,33 @@ module.exports = () => {
         const request = JSON.parse(body)
         if (isKids(request)) return body
         if (request.browseId) stopRefreshing()
+        if (request.browseId) currentHome = feed.feedSource(request) ? feed.regionalHomes[feed.regionFor(request)] || 'FEtopics' : undefined
         if (info) info.homeGeneration = homeGeneration
         return feed.prepareRequest(request, config.prefer_uk_creators) ? JSON.stringify(request) : body
     })
 
     xhr.addResponseModifier(async (url, text, info) => {
-        if (!isBrowse(url) || !info) return
-        const request = JSON.parse(info.body)
-        const source = feed.feedSource(request)
-        if (!source || isKids(request)) return
+        if (!/^(?:https:\/\/www\.youtube\.com)?\/youtubei\/v1\/(?:browse|next|search)(?:\?|$)/.test(url) || isKids()) return
         const json = JSON.parse(text)
+        if (json.error) return
+        const request = info && JSON.parse(info.body)
+        if (isKids(request)) return
+        const source = isBrowse(url) && feed.feedSource(request)
+        if (!source) {
+            if (addWatchedMenus(json.contents || json.continuationContents || json.onResponseReceivedCommands, labels().watched)) return JSON.stringify(json)
+            return
+        }
+        const region = feed.regionFor(request)
         // Leanback sends browseId "default" on startup and when navigating back to Home.
         if (request.browseId === 'default' && json.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer?.targetId !== 'browse-feedFEtopics') return
         const generation = info.homeGeneration
         const home = request.browseId && feed.sectionList(json)
         getDirectory(request.context?.client?.clientVersion)
         const rows = feed.lists(json)
+        for (const row of rows) row.items = row.items.map(item => {
+            const tile = feed.lockupTile(item.lockupViewModel, findField(item.lockupViewModel, 'menuRenderer'))
+            return tile ? { tileRenderer: tile } : item
+        })
         const load = async () => {
             const subscriptions = await info.subscriptions(request.context)
             if (subscriptions?.contents) return feed.subscriptionList(subscriptions, config.hide_shorts)
@@ -148,28 +201,41 @@ module.exports = () => {
         const [uploads, history] = await Promise.all([
             loadFirstPage ? load().catch(() => undefined) : undefined,
             canDiscover ? info.history(request.context).catch(() => undefined) : undefined,
-            enrich(rows, config.prefer_uk_creators && source === 'home')
+            region ? undefined : enrich(rows, config.prefer_uk_creators && source === 'home')
         ])
         const seen = new Set(request.continuation && source === 'home' ? latestUploads : [])
         const excluded = new Set([...(config.home_hidden_videos || []), ...(config.home_watched_videos || [])])
-        const options = { seen, blocked: blocked(), excluded, details, labels: labels(), remember }
+        const options = { seen, blocked: blocked(), excluded, details, labels: labels(), remember, region }
+        const regionalContext = region && structuredClone(request.context)
+        if (regionalContext?.client) regionalContext.client.gl = region === 'UK' ? 'GB' : 'FR'
+        const filterRegion = (lists, isDiscovery) => regionalRows(lists, {
+            region, excluded,
+            lookup: async tile => {
+                const id = details(tile).id || (await directory.owner(tile.contentId))?.id
+                if (id && !options.blocked.some(entry => feed.matchesCreator(entry, { ...details(tile), id }))) return directory.country(id)
+            },
+            continuation: info.continuation && (token => info.continuation(isDiscovery ? regionalContext : request.context, token)),
+            related: isDiscovery && info.related && (id => info.related(regionalContext, id))
+        })
         const uploadVideos = uploads?.items.map(feed.video).filter(Boolean) || []
         if (source === 'uploads') {
             if (!json.continuationContents) return
             const list = feed.subscriptionList(json, config.hide_shorts)
             json.continuationContents = { horizontalListContinuation: list }
+            if (region) await filterRegion([list], false)
             feed.rankList(list, 'uploads', options)
             for (const id of seen) latestUploads.add(id)
             return JSON.stringify(json)
         }
         if (home && generation === homeGeneration) latestUploads = new Set()
+        if (region) await Promise.all([filterRegion(rows, true), uploads && filterRegion([uploads], false)])
         if (uploads) {
-            const firstId = uploads.items[0]?.tileRenderer.contentId
-            await enrich([uploads], false)
+            const firstId = uploadVideos[0]?.contentId
+            if (!region) await enrich([uploads], false)
             feed.rankList(uploads, 'uploads', options)
             if (generation === homeGeneration) {
                 latestUploads = new Set(seen)
-                watchUploads(load, firstId, 'FEtopics', generation)
+                watchUploads(load, firstId, feed.regionalHomes[region] || 'FEtopics', generation)
             }
             if (uploads.items.length || uploads.continuations?.length) {
                 const index = home.contents.findIndex(item => item.shelfRenderer || item.gridRenderer)
@@ -193,7 +259,8 @@ module.exports = () => {
                 history: discoveryVideos(history?.contents), uploads: uploadVideos, home: homeVideos,
                 related: id => info.related(discoveryContext, id),
                 details, owner: directory.owner, lookup: id => info.channel(request.context, id),
-                ignored: config.home_ignored_creators || [], blocked: options.blocked, excluded
+                ignored: config.home_ignored_creators || [], blocked: options.blocked, excluded,
+                eligible: region && (async id => matchesRegion(await directory.country(id), region))
             }).catch(() => [])
             if (suggestions.length && generation === homeGeneration) {
                 for (const item of suggestions) creators.set(item.id, item)
@@ -205,13 +272,17 @@ module.exports = () => {
         const sections = feed.sectionList(json)
         if (sections?.contents) sections.contents = sections.contents.filter(section => {
             const list = section.shelfRenderer?.content?.horizontalListRenderer
+            if (region && !list && !section.gridRenderer && discoveryVideos(section).length) return false
             return !list || list.items?.length || list.continuations?.length
         })
-        feed.tagContinuations(feed.sectionList(json), source)
+        feed.tagContinuations(feed.sectionList(json), source, region)
         return JSON.stringify(json)
     })
 
     commands.addInputModifier(command => {
+        const menu = command?.showMenuCommand
+        if (menu && !isKids()) feed.watchedMenu(menu.menu?.menuRenderer?.items, menu.contentId, labels().watched)
+        const refreshHome = () => commands.resolveCommand({ browseEndpoint: { browseId: currentHome || 'FEtopics' } })
         if (command?.vtCreatorAction) {
             const creator = creators.get(command.channelId)
             if (!creator) return false
@@ -231,12 +302,12 @@ module.exports = () => {
                 if (action === 'channel') commands.resolveCommand({ browseEndpoint: { browseId: creator.id } })
                 if (action === 'ignore') {
                     configManager.set({ home_ignored_creators: [...new Set([...(config.home_ignored_creators || []), creator.id])] })
-                    commands.resolveCommand({ browseEndpoint: { browseId: 'FEtopics' } })
+                    refreshHome()
                 }
                 if (action === 'subscribe') {
                     commands.resolveCommand(creator.subscribe)
                     const generation = homeGeneration
-                    setTimeout(() => { if (generation === homeGeneration) commands.resolveCommand({ browseEndpoint: { browseId: 'FEtopics' } }) }, 700)
+                    setTimeout(() => { if (generation === homeGeneration) refreshHome() }, 700)
                 }
             }
             return false
@@ -245,14 +316,15 @@ module.exports = () => {
         if (!['why', 'block', 'hide', 'watched'].includes(action)) return command
         const id = command.videoId
         const card = cards.get(id)
-        if (!card) return false
+        if (!feed.videoId.test(id) || (!card && action !== 'watched')) return false
         commands.resolveCommand({ signalAction: { signal: 'POPUP_BACK' } })
         const strings = labels()
         if (action === 'hide' || action === 'watched') {
             const key = action === 'hide' ? 'home_hidden_videos' : 'home_watched_videos'
             configManager.set({ [key]: [...new Set([...(config[key] || []), id])] })
             if (action === 'hide' && card.nativeHide) commands.resolveCommand(card.nativeHide)
-            commands.resolveCommand({ browseEndpoint: { browseId: 'FEtopics' } })
+            if (currentHome && onHomeRoute()) refreshHome()
+            else if (action === 'watched') toast(strings.watched)
         } else if (action === 'why') {
             let reason = strings.discovery_reason
             if (card.source === 'uploads') reason = strings.subscription_reason
@@ -272,7 +344,7 @@ module.exports = () => {
                 const entries = blocked()
                 if (!entries.some(other => feed.matchesCreator(entry, other))) configManager.set({ home_blocked_creators: [...entries, entry] })
                 // Reread Home so every currently displayed row observes the block.
-                commands.resolveCommand({ browseEndpoint: { browseId: 'FEtopics' } })
+                refreshHome()
             })()
         }
         return false

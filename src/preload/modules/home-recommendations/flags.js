@@ -28,7 +28,7 @@ function thumbnailId(source) {
         source.match(/[?&]videoID=([\w-]{11})(?:[&#"')]|$)/)?.[1]
 }
 
-function decorateThumbnails(lookup, unknownLabel, enabled) {
+function decorateThumbnails(lookup, unknownLabel, enabled, knownCountry = () => undefined) {
     const selector = 'ytlr-tile-header-renderer, yt-lockup-view-model thumbnail, yt-thumbnail-view-model, ytlr-thumbnail-view-model'
     const states = new Map()
     const visible = new Set()
@@ -43,6 +43,10 @@ function decorateThumbnails(lookup, unknownLabel, enabled) {
         badge.setAttribute('aria-label', label)
         if (image) badge.style.backgroundImage = 'url("' + image + '")'
     }
+    async function renderFlag(host, state, country) {
+        const image = await flagImage(country)
+        if (image && host.isConnected && states.get(host) === state) update(state.badge, country, image)
+    }
     function pump() {
         for (const host of visible) {
             if (active >= 3) break
@@ -50,10 +54,8 @@ function decorateThumbnails(lookup, unknownLabel, enabled) {
             if (!state?.id || state.started) continue
             state.started = true
             active++
-            Promise.resolve().then(() => lookup(state.id)).then(async country => {
-                const image = await flagImage(country)
-                if (image && host.isConnected && states.get(host) === state) update(state.badge, country, image)
-            }).catch(() => {}).finally(() => { active--; pump() })
+            Promise.resolve().then(() => lookup(state.id)).then(country => renderFlag(host, state, country))
+                .catch(() => {}).finally(() => { active--; pump() })
         }
     }
     const observer = new IntersectionObserver(entries => {
@@ -100,6 +102,11 @@ function decorateThumbnails(lookup, unknownLabel, enabled) {
             states.set(host, state)
             update(badge, unknownLabel())
             host.appendChild(badge)
+            const country = id && knownCountry(id)
+            if (country) {
+                state.started = true
+                renderFlag(host, state, country).catch(() => {})
+            }
             observer.observe(host)
         }
         pump()

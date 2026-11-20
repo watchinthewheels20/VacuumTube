@@ -70,7 +70,7 @@ function suggestion(response, id, sample) {
         thumbnail: sample.header?.tileHeaderRenderer?.thumbnail || header.avatar }
 }
 
-async function suggestedCreators(tiles, { details, owner, lookup, ignored, blocked, excluded }) {
+async function suggestedCreators(tiles, { details, owner, lookup, ignored, blocked, excluded, eligible }) {
     const samples = tiles.filter(tile => !excluded.has(tile.contentId))
     const ids = new Set()
     const result = new Map()
@@ -87,6 +87,7 @@ async function suggestedCreators(tiles, { details, owner, lookup, ignored, block
             if (blocked.some(entry => matchesCreator(entry, identity) ||
                 (!entry.id && entry.name && identity.name && entry.name.trim().toLowerCase() === identity.name.trim().toLowerCase()))) continue
             ids.add(id)
+            if (eligible && !await eligible(id)) continue
             const response = await lookup(id).catch(() => undefined)
             const match = suggestion(response, id, tile)
             if (match) result.set(order, match)
