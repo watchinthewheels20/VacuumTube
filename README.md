@@ -116,7 +116,7 @@ VacuumTube has some settings that you can change, which are located in the YouTu
 
 Home video shelves fit four thumbnails across a maximised window. A flag on the thumbnail shows the channel's published country. A globe means the country is unavailable. Long-press **Hide this video** or **Mark as watched** to remove it from Home and close the gap. These are local feed preferences.
 
-**Suggested new creators** uses channels from your personalised discovery rows. VacuumTube checks subscription status before showing a suggestion. Select a creator to read the description, watch a sample video, browse the channel, subscribe or ignore future suggestions from that creator.
+**Suggested new creators** explores videos related to your recent watch history and subscription uploads. When those feeds have few examples, Home videos can also provide starting points. VacuumTube filters out the channels it can identify in your recent history, subscription uploads and current Home results, and checks that each suggestion is unsubscribed. If it finds no eligible channels, it omits the row. Select a creator to read the description, watch a sample video, browse the channel, subscribe or ignore future suggestions from that creator.
 
 For installer updates, close VacuumTube and run the new setup under the same Windows user. The installer keeps the browser profile under the user's application-data directory. Portable launches use the profile selected by the portable flag or marker.
 
