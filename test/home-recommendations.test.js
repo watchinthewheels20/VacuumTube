@@ -127,9 +127,9 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     const home = surface({ sectionListRenderer: { contents: [feed.subscriptionShelf({ items: [item(first, channel), item(second, other, '@other')] }, 'Recommended')] } })
     const uploads = surface({ gridRenderer: { items: [item(first, channel)], continuations: [{ nextContinuationData: { continuation: 'older' } }] } })
     let requests = 0
-    async function browse(request, response = home, getUploads = async () => { requests++; return structuredClone(uploads) }) {
+    async function browse(request, response = home, getUploads = async () => { requests++; return structuredClone(uploads) }, extra = {}) {
         const body = JSON.stringify({ context: { client: { clientName: 'TVHTML5' } }, ...request })
-        const info = { body, subscriptions: getUploads }
+        const info = { body, subscriptions: getUploads, ...extra }
         const sent = JSON.parse(hooks.send(url, body, info))
         const result = await hooks.receive(url, JSON.stringify(response), info)
         return { sent, json: result && JSON.parse(result) }
@@ -252,4 +252,16 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
         const late = await browse(more, { continuationContents: { horizontalListContinuation: { items: batch } } })
         assert.deepEqual(late.json, unsupported.json, 'an old continuation cannot append to a different region')
     }
+    const uk = { browseEndpoint: { browseId: feed.regionalHomes.UK } }
+    const partial = hooks.action(uk).browseEndpoint
+    assert.match(partial.params, /^vacuumtube-region-refresh-/)
+    const fuller = hooks.action(uk).browseEndpoint
+    assert.notEqual(fuller.params, partial.params, 'a partial native page is never reused')
+    const videos = Array.from({ length: 30 }, (_, index) => item(String(index + 100).padStart(11, '0'), other))
+    const full = await browse(fuller, emptyHome, async () => undefined, {
+        regionalSearch: async () => ({ contents: videos })
+    })
+    assert.equal(feed.lists(full.json).length, 6)
+    await browse({ browseId: 'FElibrary' })
+    assert.equal(hooks.action(uk).browseEndpoint.params, fuller.params, 'reopening UK uses the complete native page')
 })

@@ -12,9 +12,11 @@ const pageRows = 6
 const cardsAcross = 4
 const searches = {
     UK: ['UK documentary nature history', 'British science technology explainers', 'UK cooking travel', 'British arts music culture',
-        'UK local history independent documentary', 'UK wildlife countryside walking'],
+        'UK local history independent documentary', 'UK wildlife countryside walking',
+        'BBC News UK politics', 'ITV News UK', 'Auto Shenanigans UK roads'],
     EU: ['European documentary nature history', 'France science documentaire', 'Deutschland Technik Wissenschaft',
-        'España viajes cultura', 'Italia cucina tradizionale', 'Polska przyroda reportaż', 'UK documentary nature history']
+        'España viajes cultura', 'Italia cucina tradizionale', 'Polska przyroda reportaż',
+        'UK documentary nature history', 'ARTE Reportage Europe', 'Deutsche Welle Europa']
 }
 
 function matchesRegion(country, region) {
@@ -75,7 +77,10 @@ async function regionalRows(rows, { region, lookup, known = () => undefined, con
                 state.ids.add(tile.contentId)
                 const country = known(tile)
                 if (country) {
-                    if (matchesRegion(country, region)) results[slot] = { tileRenderer: tile }
+                    if (matchesRegion(country, region)) {
+                        results[slot] = { tileRenderer: tile }
+                        onMatch?.(tile)
+                    }
                     continue
                 }
                 if (!candidates.has(tile.contentId)) candidates.set(tile.contentId, new Promise(resolve => {
@@ -84,7 +89,7 @@ async function regionalRows(rows, { region, lookup, known = () => undefined, con
                 }))
                 if (matchesRegion(await candidates.get(tile.contentId), region)) {
                     results[slot] = { tileRenderer: tile }
-                    if (!signal?.aborted) onMatch?.()
+                    if (!signal?.aborted) onMatch?.(tile)
                 }
             }
         }
@@ -133,32 +138,42 @@ function sectionRows(sections) {
     return lists({ continuationContents: { sectionListContinuation: sections } })
 }
 
-// Keep the source shelves in order. Pool short shelves under an accurate regional title.
-// A shelf with its own continuation remains reachable for native horizontal paging.
+// Keep original full shelves in order and use verified surplus to fill missing rows.
 function arrangeRegionalPage(sections, title, supplemental, seen) {
     const sparse = []
-    const shortWithContinuation = []
-    let full = 0
+    const short = []
+    const fullLists = []
     sections.contents = sections.contents.filter(section => {
         const [list] = sectionRows({ contents: [section] })
         if (!list) return true
         list.items = uniqueRegionalItems(list.items, seen)
         if (list.items.length >= cardsAcross) {
-            full++
+            fullLists.push(list)
             return true
         }
-        if (list.continuations?.length && list.items.length) shortWithContinuation.push(section)
+        if (list.continuations?.length && list.items.length) short.push({ section, list })
         else sparse.push(...list.items)
         return false
     })
-    const pool = [...sparse, ...uniqueRegionalItems(supplemental, seen).slice(0, Math.max(0, pageRows * cardsAcross - full * cardsAcross))]
+    const target = Math.max(0, (pageRows - fullLists.length) * cardsAcross)
+    const pool = [...sparse, ...uniqueRegionalItems(supplemental, seen).slice(0, Math.max(0, target - sparse.length))]
+    for (const list of fullLists) {
+        const needed = Math.min(target - pool.length, list.items.length - cardsAcross)
+        if (needed > 0) pool.push(...list.items.splice(-needed))
+    }
+    while (pool.length < target && short.length) pool.push(...short.shift().list.items)
+    let full = fullLists.length
     for (let i = 0; i < pool.length; i += cardsAcross) {
         const items = pool.slice(i, i + cardsAcross)
         sections.contents.push(subscriptionShelf({ items }, title))
         if (items.length === cardsAcross) full++
     }
-    sections.contents.push(...shortWithContinuation)
+    sections.contents.push(...short.map(item => item.section))
     return full
+}
+
+function countFullRows(sections) {
+    return sectionRows(sections).filter(list => list.items.filter(video).length >= cardsAcross).length
 }
 
 function uniqueRegionalItems(items, seen) {
@@ -170,9 +185,9 @@ function uniqueRegionalItems(items, seen) {
     })
 }
 
-async function fillRegionalPage(sections, { title, search, seen = new Set(), ...options }) {
+async function fillRegionalPage(sections, { title, search, relatedChannels, additional, seen = new Set(), ...options }) {
     const initial = sectionRows(sections)
-    const background = AbortSignal.timeout(12000)
+    const background = AbortSignal.timeout(15000)
     const signal = options.signal ? AbortSignal.any([options.signal, background]) : background
     const scoped = { ...options, signal }
     const extra = []
@@ -198,25 +213,44 @@ async function fillRegionalPage(sections, { title, search, seen = new Set(), ...
 
     // Search supplies a wider candidate pool when Home is too narrow. Country lookup is
     // still mandatory, and native recommendations stay ahead of search results.
+    const more = []
     const count = () => {
         const verified = structuredClone({ contents: [...sections.contents, ...extra] })
         cachedRegionalRows(sectionRows(verified), { ...options, known: options.known || (() => undefined), excluded: options.excluded || new Set() })
-        return arrangeRegionalPage(verified, title, [], new Set(seen))
+        return arrangeRegionalPage(verified, title, [...more, ...(additional?.() || [])], new Set(seen))
     }
-    const more = []
+    function addMore(batch) {
+        const known = new Set([...seen, ...more.map(item => video(item).contentId)])
+        more.push(...uniqueRegionalItems(batch.flatMap(row => row.items), known))
+    }
+    async function collect(load, limit) {
+        const candidates = searchTiles((await load())?.contents)
+        const eligible = item => matchesRegion(options.known?.(video(item)), options.region)
+        const batch = { items: [...candidates.filter(eligible), ...candidates.filter(item => !eligible(item))].slice(0, limit) }
+        await regionalRows([batch], { ...scoped, related: undefined, continuation: undefined, budget: 3600, concurrency: 4 })
+        return batch
+    }
+    async function expandChannels() {
+        if (signal.aborted || count() >= pageRows) return
+        addMore(await Promise.all(relatedChannels(signal).map(load => collect(() => load().catch(() => undefined), 12))))
+    }
+    // Start fetching uploads from already verified channels while search candidates are
+    // still being checked. Their other videos often need no new country lookup.
+    let channelTimer
+    const earlyChannels = relatedChannels && Promise.race([first, new Promise(resolve => {
+        channelTimer = setTimeout(resolve, 1000)
+    })]).finally(() => clearTimeout(channelTimer)).then(expandChannels)
     if (search && searches[options.region]) {
-        for (const queries of [searches[options.region].slice(0, 3), searches[options.region].slice(3)]) {
-            if (signal.aborted || count() + Math.floor(more.length / cardsAcross) >= pageRows) break
-            const results = await Promise.all(queries.map(query => search(query, signal).catch(() => undefined)))
-            const batch = results.map(result => ({ items: searchTiles(result?.contents).slice(0, 32) }))
-            await regionalRows(batch, { ...scoped, related: undefined, continuation: undefined, budget: 4200, concurrency: 8 })
-            const known = new Set([...seen, ...more.map(item => video(item).contentId)])
-            more.push(...uniqueRegionalItems(batch.flatMap(row => row.items), known))
+        const queries = searches[options.region]
+        for (let start = 0; start < queries.length; start += 3) {
+            if (signal.aborted || count() >= pageRows) break
+            addMore(await Promise.all(queries.slice(start, start + 3).map(query => collect(() => search(query, signal).catch(() => undefined), 32))))
         }
     }
-    await Promise.all([first, later])
+    await Promise.all([first, later, earlyChannels])
+    if (relatedChannels) await expandChannels()
     sections.contents.push(...extra)
-    arrangeRegionalPage(sections, title, more, new Set(seen))
+    arrangeRegionalPage(sections, title, [...more, ...(additional?.() || [])], new Set(seen))
 }
 
-module.exports = { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage }
+module.exports = { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage, arrangeRegionalPage, countFullRows, pageRows }
