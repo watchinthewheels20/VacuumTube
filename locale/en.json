@@ -25,6 +25,8 @@
             "channel": "Browse channel",
             "unknown_country": "Channel location unavailable",
             "checking_region": "Checking video locations…",
+            "more_uk": "More from the UK",
+            "more_europe": "More from Europe",
             "subscription_reason": "This upload appeared in your Subscriptions feed.",
             "discovery_reason": "YouTube included this video in your Home recommendations.",
             "shelf_reason": "YouTube included this video in “{shelf}” on Home.",

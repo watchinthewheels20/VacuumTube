@@ -10,7 +10,7 @@ const { homeTileStyle, creator } = require('../src/preload/modules/home-recommen
 const { thumbnailId, decorateThumbnails } = require('../src/preload/modules/home-recommendations/flags')
 const labels = require('../locale/en.json').settings.home_recommendations
 const { filterGuide } = require('../src/preload/modules/sidebar')
-const { regionalRows, matchesRegion } = require('../src/preload/modules/home-recommendations/regions')
+const { regionalRows, matchesRegion, fillRegionalPage } = require('../src/preload/modules/home-recommendations/regions')
 const feed = require('../src/preload/modules/home-recommendations/feed')
 const channel = 'UC' + 'a'.repeat(22)
 const video = id => ({ tileRenderer: { contentType: 'TILE_CONTENT_TYPE_VIDEO', contentId: id, onSelectCommand: { watchEndpoint: { videoId: id } } } })
@@ -56,6 +56,40 @@ test('regional shelves exclude unknown countries and replenish from matching con
     assert.equal(matchesRegion('GB', 'UK'), true)
     assert.equal(matchesRegion('France', 'UK'), false)
     assert.equal(matchesRegion(undefined, 'EU'), false)
+})
+
+test('both regional pages fill six shelves from sparse Home, skipping duplicates and unverified countries', async () => {
+    const setup = index => video(String(index).padStart(11, '0'))
+    const ids = (start, length) => Array.from({ length }, (_, i) => setup(start + i))
+    for (const region of ['UK', 'EU']) {
+        const title = 'More from ' + region
+        const sections = { contents: [feed.subscriptionShelf({ items: ids(0, 4) }, 'First shelf')],
+            continuations: [{ nextContinuationData: { continuation: 'next-home' } }] }
+        const country = tile => {
+            const id = Number(tile.contentId)
+            return id < 4 ? [undefined, 'United States', 'United Kingdom', 'Ireland'][id] :
+                id % 2 === 0 ? 'United Kingdom' : 'Ireland'
+        }
+        const seen = new Set(['00000000002'])
+        const calls = []
+        let searches = 0
+        await fillRegionalPage(sections, { region, title, seen, known: country, lookup: async () => undefined,
+            continuation: async token => {
+                calls.push(token)
+                return { continuationContents: { sectionListContinuation: {
+                    contents: [feed.subscriptionShelf({ items: ids(4, 10) }, 'More native Home')]
+                } } }
+            }, search: async () => ({ contents: ids(14 + searches++ * 14, 14) })
+        })
+        assert.deepEqual(calls, ['next-home'])
+        assert.equal(sections.continuations, undefined)
+        const rows = feed.lists({ continuationContents: { sectionListContinuation: sections } })
+        const tiles = rows.flatMap(row => row.items.map(feed.video))
+        assert.ok(rows.filter(row => row.items.length >= 4).length >= 6)
+        assert.equal(new Set(tiles.map(tile => tile.contentId)).size, tiles.length)
+        assert.ok(tiles.every(tile => !seen.has(tile.contentId) && matchesRegion(country(tile), region)))
+        assert.ok(sections.contents.some(section => section.shelfRenderer?.headerRenderer?.shelfHeaderRenderer?.avatarLockup?.avatarLockupRenderer?.title.runs[0].text === 'More native Home'))
+    }
 })
 
 test('reinstalls prefer the established session and retain a legacy root profile in place', t => {

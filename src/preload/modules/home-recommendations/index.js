@@ -7,7 +7,7 @@ const feed = require('./feed')
 const { channelDirectory, findField } = require('./channels')
 const { discover, discoveryVideos, creatorTile } = require('./creators')
 const { decorateThumbnails } = require('./flags')
-const { matchesRegion, cachedRegionalRows, regionalRows } = require('./regions')
+const { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage } = require('./regions')
 
 const english = require('../../../../locale/en.json').settings.home_recommendations
 const labels = () => locale.getLocale()?.settings.home_recommendations || english
@@ -54,6 +54,9 @@ module.exports = () => {
     let homeGeneration = 0
     let refreshTimer
     let latestUploads = new Set()
+    let latestRegionalVideos = new Set()
+    const regionalPages = new Map()
+    let regionalAccount
     let currentHome
     let activeBrowse
     let staged
@@ -112,6 +115,7 @@ module.exports = () => {
     window.addEventListener('pagehide', () => {
         stopRefreshing()
         activeBrowse?.abort()
+        for (const page of regionalPages.values()) page.controller.abort()
     })
 
     // Only refresh a visible, idle Home, and only after its newest upload changes.
@@ -182,14 +186,26 @@ module.exports = () => {
             config?.DELEGATED_SESSION_ID, request.context?.user])
     }
 
+    function regionalKey(request, info) {
+        const profile = account(request, info)
+        if (regionalAccount !== profile) {
+            for (const page of regionalPages.values()) page.controller.abort()
+            regionalPages.clear()
+            regionalAccount = profile
+        }
+        return JSON.stringify([profile, config.hide_shorts, config.prefer_uk_creators, config.home_hidden_videos, config.home_watched_videos,
+            config.home_blocked_creators, config.home_ignored_creators])
+    }
+
     xhr.addRequestModifier((url, body, info) => {
         if (!isBrowse(url) || typeof body !== 'string') return body
         const request = JSON.parse(body)
         if (isKids(request)) return body
         if (request.browseId) {
+            if (info) info.regionalKey = regionalKey(request, info)
             stopRefreshing()
             currentHome = feed.feedSource(request) ? feed.regionalHomes[feed.regionFor(request)] || 'FEtopics' : undefined
-            if (info && staged?.browseId === request.browseId && staged.until > Date.now() && staged.account === account(request, info)) {
+            if (info && staged?.browseId === request.browseId && staged.until > Date.now() && staged.key === info.regionalKey) {
                 info.homeStaged = staged.snapshot
             } else {
                 if (info && staged?.browseId === request.browseId) info.skipHomeUpgrade = true
@@ -230,21 +246,33 @@ module.exports = () => {
             if (!signal?.aborted) {
                 if (hasHome) {
                     latestUploads = snapshot.uploadIds
+                    latestRegionalVideos = new Set(snapshot.cards.keys())
                     creators.clear()
                     for (const item of snapshot.suggestions) creators.set(item.id, item)
                     if (snapshot.loadedUploads) watchUploads(load, snapshot.firstUpload, currentHome, homeGeneration)
                 } else if (source === 'uploads') {
                     for (const id of snapshot.uploadIds) latestUploads.add(id)
                 }
+                if (region && !hasHome) for (const id of snapshot.cards.keys()) latestRegionalVideos.add(id)
                 for (const [id, card] of snapshot.cards) remember(id, card)
             }
             return JSON.stringify(snapshot.json)
         }
         if (info.homeStaged) return publish(info.homeStaged)
+        const previous = region && hasHome && regionalPages.get(region)
+        const cachedPage = previous && previous.key === info.regionalKey && previous.expires > Date.now() ? previous : undefined
+        if (cachedPage?.snapshot) return publish(cachedPage.snapshot)
+        const page = region && hasHome && (cachedPage || { key: info.regionalKey, controller: new AbortController(), expires: Date.now() + 120000 })
+        if (page && !cachedPage) {
+            previous?.controller.abort()
+            regionalPages.set(region, page)
+        }
+        const workSignal = page?.controller.signal || signal
+        const seenRegional = new Set(region && !hasHome ? latestRegionalVideos : [])
 
         const loadFirstPage = hasHome && (info.authenticated || window.ytcfg?.data_?.LOGGED_IN !== false)
         const canDiscover = loadFirstPage && info.channel && info.related && info.history
-        const excluded = new Set([...(config.home_hidden_videos || []), ...(config.home_watched_videos || [])])
+        const excluded = new Set([...(config.home_hidden_videos || []), ...(config.home_watched_videos || []), ...seenRegional])
         const blockedCreators = blocked()
         const discoveryContext = structuredClone(request.context)
         if (discoveryContext?.client && (region || config.prefer_uk_creators)) {
@@ -252,7 +280,8 @@ module.exports = () => {
         }
         let countryFound
         const regionalOptions = {
-            region, excluded, signal,
+            region, excluded, signal: workSignal,
+            allow: tile => !config.hide_shorts || tile.contentType === 'TILE_CONTENT_TYPE_VIDEO',
             onMatch: () => countryFound?.(),
             known: tile => {
                 const identity = details(tile)
@@ -260,22 +289,22 @@ module.exports = () => {
             },
             lookup: async tile => {
                 const id = details(tile).id || (await directory.owner(tile.contentId))?.id
-                if (!signal?.aborted && id && !blockedCreators.some(entry => feed.matchesCreator(entry, { ...details(tile), id }))) {
+                if (!workSignal?.aborted && id && !blockedCreators.some(entry => feed.matchesCreator(entry, { ...details(tile), id }))) {
                     return directory.country(id)
                 }
             }
         }
         let uploads
-        const uploadsRequest = loadFirstPage && load(signal).then(result => { uploads = result }).catch(() => {})
-        const creatorRequest = canDiscover && (async () => {
-            const [history] = await Promise.all([info.history(request.context, signal).catch(() => undefined), uploadsRequest])
-            if (signal?.aborted) return []
+        const uploadsRequest = !cachedPage && loadFirstPage && load(workSignal).then(result => { uploads = result }).catch(() => {})
+        const creatorRequest = !cachedPage && canDiscover && (async () => {
+            const [history] = await Promise.all([info.history(request.context, workSignal).catch(() => undefined), uploadsRequest])
+            if (workSignal?.aborted) return []
             return discover({
                 history: discoveryVideos(history?.contents), uploads: uploads?.items.map(feed.video).filter(Boolean) || [],
                 home: discoveryVideos(feed.sectionList(json)?.contents),
-                related: id => info.related(discoveryContext, id, signal),
-                details, owner: directory.owner, lookup: id => info.channel(request.context, id, signal),
-                ignored: config.home_ignored_creators || [], blocked: blockedCreators, excluded, signal,
+                related: id => info.related(discoveryContext, id, workSignal),
+                details, owner: directory.owner, lookup: id => info.channel(request.context, id, workSignal),
+                ignored: config.home_ignored_creators || [], blocked: blockedCreators, excluded, signal: workSignal,
                 eligible: region && (async id => matchesRegion(await directory.country(id), region))
             })
         })().catch(() => [])
@@ -283,7 +312,7 @@ module.exports = () => {
         async function build(complete) {
             const result = structuredClone(json)
             const sections = feed.sectionList(result)
-            const rows = feed.lists(result)
+            let rows = feed.lists(result)
             for (const row of rows) row.items = row.items.map(item => {
                 const tile = feed.lockupTile(item?.lockupViewModel, findField(item?.lockupViewModel, 'menuRenderer'))
                 return tile ? { tileRenderer: tile } : item
@@ -291,11 +320,17 @@ module.exports = () => {
             async function regional(lists, isDiscovery) {
                 if (!complete) return cachedRegionalRows(lists, regionalOptions)
                 const context = isDiscovery ? discoveryContext : request.context
-                await regionalRows(lists, {
+                const settings = {
                     ...regionalOptions,
-                    continuation: info.continuation && (token => info.continuation(context, token, signal)),
-                    related: isDiscovery && info.related && (id => info.related(context, id, signal))
-                })
+                    continuation: info.continuation && ((token, signal = workSignal) => info.continuation(context, token, signal)),
+                    related: isDiscovery && info.related && ((id, signal = workSignal) => info.related(context, id, signal))
+                }
+                if (isDiscovery && Array.isArray(sections?.contents)) {
+                    const key = region === 'UK' ? 'more_uk' : 'more_europe'
+                    await fillRegionalPage(sections, { ...settings, title: labels()[key] || english[key], seen: seenRegional,
+                        search: info.regionalSearch && ((query, signal) => info.regionalSearch(context, query, signal)) })
+                    rows = feed.lists(result)
+                } else await regionalRows(lists, settings)
             }
             const discovery = source === 'home' && (region
                 ? regional(rows, true)
@@ -344,33 +379,63 @@ module.exports = () => {
         }
 
         if (source === 'uploads' && !json.continuationContents) return
-        const complete = build(true).catch(() => undefined)
-        let timer
+        const complete = cachedPage?.promise || build(true).catch(() => undefined)
+        if (page && !cachedPage) {
+            page.promise = complete.then(snapshot => {
+                if (!workSignal.aborted && snapshot?.cards.size) page.snapshot = snapshot
+                if (!page.snapshot && regionalPages.get(region) === page) regionalPages.delete(region)
+                return snapshot
+            })
+        }
         let initial
         const warmRegion = region && feed.lists(json).some(list => list.items.some(item => {
             const tile = feed.video(item) || feed.lockupTile(item?.lockupViewModel)
             return tile && !excluded.has(tile.contentId) && matchesRegion(regionalOptions.known(tile), region)
         }))
-        const firstPaintBudget = warmRegion ? 80 : region ? 500 : 250
-        try {
-            // Only verified matches may render. Never wait for every country or optional shelf.
-            initial = await Promise.race([complete, new Promise(resolve => { timer = setTimeout(resolve, firstPaintBudget) })])
-        } finally { clearTimeout(timer) }
+        const firstPaintBudget = region && request.continuation ? 5200 : warmRegion ? 80 : region ? 500 : 250
+        // An explicit scroll can wait for a fuller next page. A screen switch never waits for it.
+        let timer
+        let stopWaiting
+        const firstPaint = new Promise(resolve => {
+            stopWaiting = () => resolve()
+            timer = setTimeout(stopWaiting, firstPaintBudget)
+            signal?.addEventListener('abort', stopWaiting, { once: true })
+        })
+        try { initial = await Promise.race([complete, firstPaint]) }
+        finally {
+            clearTimeout(timer)
+            signal?.removeEventListener('abort', stopWaiting)
+        }
+        if (signal?.aborted) return region ? '{}' : undefined
         if (initial) return publish(initial)
         const first = await build(false)
         if (hasHome && !signal?.aborted && !info.skipHomeUpgrade && typeof document !== 'undefined') {
             const browseId = feed.regionalHomes[region] || 'FEtopics'
-            const profile = account(request, info)
+            const key = info.regionalKey
             let visible = first
             let coldTimer
+            let idleTimer
+            signal?.addEventListener('abort', () => {
+                clearTimeout(idleTimer)
+                clearTimeout(coldTimer)
+            }, { once: true })
             function upgrade(snapshot) {
                 if (!snapshot || signal?.aborted || currentHome !== browseId || !onHomeRoute()) return
-                if (lastInteraction !== interaction && visible.cards.size) return
                 if (snapshot.cards.size <= visible.cards.size && snapshot.uploadIds.size <= visible.uploadIds.size &&
                     snapshot.suggestions.length <= visible.suggestions.length) return
+                if (lastInteraction !== interaction && visible.cards.size) {
+                    if (!region) return
+                    const browsing = Date.now() - lastInteraction < 1200 || document.hidden ||
+                        document.querySelector('[role="dialog"], #vt-settings-overlay-root:not(.vt-settings-hidden), ytlr-overlay-panel-renderer')
+                    if (browsing) {
+                        clearTimeout(idleTimer)
+                        idleTimer = setTimeout(() => upgrade(snapshot), 1200)
+                        return
+                    }
+                }
                 visible = snapshot
                 const pending = staged?.browseId === browseId && staged.until > Date.now()
-                staged = { snapshot, browseId, account: profile, until: Date.now() + 5000 }
+                staged = { snapshot, browseId, key, until: Date.now() + 5000 }
                 if (!pending) commands.resolveCommand({ browseEndpoint: { browseId } })
             }
             if (region && !first.cards.size) {
