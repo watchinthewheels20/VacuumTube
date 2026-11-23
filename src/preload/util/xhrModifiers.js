@@ -174,7 +174,6 @@ function XMLHttpRequest() {
             requestInfo.subscriptions = (context, signal) => read(context, { browseId: 'FEsubscriptions' }, signal)
             requestInfo.history = (context, signal) => read(context, { browseId: 'FEhistory' }, signal)
             requestInfo.continuation = (context, continuation, signal) => read(context, { continuation }, signal)
-            requestInfo.regionalSearch = (context, query, signal) => read(context, { query }, signal, new URL('/youtubei/v1/search', endpoint))
             requestInfo.related = (context, videoId, signal) => /^[\w-]{11}$/.test(videoId)
                 ? read(context, { videoId }, signal, new URL('/youtubei/v1/next', endpoint)) : undefined
             requestInfo.channel = (context, id, signal) => /^UC[\w-]{22}$/.test(id) ? read(context, { browseId: id }, signal) : undefined
