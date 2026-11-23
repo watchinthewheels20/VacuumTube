@@ -44,6 +44,12 @@ test('Home and its tagged continuations use the UK preference independently of o
     assert.equal(request.continuation, 'opaque')
     assert.equal(request.context.client.gl, 'US')
     assert.equal(feed.feedSource(request), undefined)
+    const refresh = { browseId: feed.regionalHomes.UK, params: 'vacuumtube-region-refresh-12' }
+    assert.equal(feed.prepareRequest(refresh, false), true)
+    assert.deepEqual(refresh, { browseId: 'FEtopics' })
+    const native = { browseId: feed.regionalHomes.EU, params: 'native-params' }
+    assert.equal(feed.prepareRequest(native, false), true)
+    assert.equal(native.params, 'native-params')
 })
 
 test('UK promotion preserves non-video slots, the native menu and other discovery choices', () => {
@@ -188,9 +194,15 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     }
     const regional = { browseId: feed.regionalHomes.UK }
     commands.length = 0
-    const cold = await browse(regional, home, async () => undefined)
+    const coldHome = structuredClone(home)
+    const coldSections = feed.sectionList(coldHome)
+    coldSections.contents.push(feed.subscriptionShelf({ items: [],
+        continuations: [{ nextContinuationData: { continuation: 'empty-shelf' } }] }, 'Empty shelf'))
+    coldSections.continuations = [{ nextContinuationData: { continuation: 'next-page' } }]
+    const cold = await browse(regional, coldHome, async () => undefined)
     assert.equal(cold.sent.browseId, 'FEtopics')
     assert.deepEqual(feed.lists(cold.json), [], 'an unresolved country never enters the first grid')
+    assert.equal(feed.sectionList(cold.json).continuations[0].nextContinuationData.continuation, 'vacuumtube.home.home.UK.next-page')
     const pendingRequests = publicRequests
     assert.ok(pendingRequests > 0)
     await browse({ browseId: 'FEsubscriptions' })
@@ -207,4 +219,37 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     config.home_watched_videos.push(second)
     const invalidated = await browse(regional, home, async () => undefined)
     assert.deepEqual(feed.lists(invalidated.json), [], 'changed watched preferences invalidate the cached page')
+
+    const outside = 'UC' + 'c'.repeat(22)
+    const french = 'UC' + 'd'.repeat(22)
+    const unknown = 'UC' + 'e'.repeat(22)
+    publicFetch = async (_url, request) => {
+        const data = JSON.parse(request.body)
+        const countries = { [outside]: 'United States', [french]: 'France' }
+        if (data.browseId) return Response.json({ header: { continuationCommand: { token: data.browseId } } })
+        return Response.json({ onResponseReceivedEndpoints: [{ aboutChannelViewModel: {
+            channelId: data.continuation, country: countries[data.continuation]
+        } }] })
+    }
+    const batch = [item('44444444444', other), item('55555555555', outside),
+        item('66666666666', french), item('77777777777', unknown)]
+    for (const [region, accepted] of [['UK', ['44444444444']], ['EU', ['44444444444', '66666666666']]]) {
+        await browse({ browseId: feed.regionalHomes[region] }, emptyHome, async () => undefined)
+        const more = { continuation: 'vacuumtube.home.home.' + region + '.next' }
+        const { sent, json } = await browse(more, { continuationContents: { horizontalListContinuation: { items: batch,
+            continuations: [{ nextContinuationData: { continuation: 'later' } }] } } })
+        assert.equal(sent.continuation, 'next')
+        const list = feed.lists(json)[0]
+        assert.deepEqual(list.items.map(entry => entry.tileRenderer.contentId), accepted)
+        assert.ok(list.items.every(entry => entry.tileRenderer.style === feed.homeTileStyle))
+        assert.equal(list.continuations[0].nextContinuationData.continuation, 'vacuumtube.home.home.' + region + '.later')
+        const unsupported = await browse(more, { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: batch } }] })
+        assert.deepEqual(unsupported.json, { continuationContents: { horizontalListContinuation: { items: [] } } })
+        t.mock.method(console, 'warn', () => {})
+        const broken = await hooks.receive(url, '{', { body: JSON.stringify(more) })
+        assert.deepEqual(JSON.parse(broken), unsupported.json, 'a response failure cannot expose the raw regional payload')
+        await browse({ browseId: feed.regionalHomes[region === 'UK' ? 'EU' : 'UK'] }, emptyHome, async () => undefined)
+        const late = await browse(more, { continuationContents: { horizontalListContinuation: { items: batch } } })
+        assert.deepEqual(late.json, unsupported.json, 'an old continuation cannot append to a different region')
+    }
 })
