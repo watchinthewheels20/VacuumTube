@@ -116,7 +116,7 @@ VacuumTube has some settings that you can change, which are located in the YouTu
 
 Home video shelves fit four thumbnails across a maximised window. A flag on the thumbnail shows the channel's published country. A globe means the country is unavailable. Long-press a video to **Mark as watched** and remove it from the Home feeds, or use **Hide this video** on Home. These are local feed preferences.
 
-Select **UK** or **EU** in the sidebar for a regional Home feed. UK includes channels that publish a UK location. EU covers Europe, including the UK. Regional shelves use verified channel countries and look for qualifying replacements when a shelf is short. A shelf can be shorter or absent when too few suitable videos are available.
+Select **UK** or **EU** in the sidebar for a regional Home feed. UK includes channels that publish a UK location. EU covers Europe, including the UK. The grid can open with already verified videos while VacuumTube checks more in the background. A shelf can be shorter or absent when too few suitable videos are available.
 
 **Suggested new creators** explores videos related to your recent watch history and subscription uploads. When those feeds have few examples, Home videos can also provide starting points. VacuumTube filters out the channels it can identify in your recent history, subscription uploads and current Home results, and checks that each suggestion is unsubscribed. If it finds no eligible channels, it omits the row. Select a creator to read the description, watch a sample video, browse the channel, subscribe or ignore future suggestions from that creator.
 

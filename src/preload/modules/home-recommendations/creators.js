@@ -70,14 +70,14 @@ function suggestion(response, id, sample) {
         thumbnail: sample.header?.tileHeaderRenderer?.thumbnail || header.avatar }
 }
 
-async function suggestedCreators(tiles, { details, owner, lookup, ignored, blocked, excluded, eligible }) {
+async function suggestedCreators(tiles, { details, owner, lookup, ignored, blocked, excluded, eligible, signal }) {
     const samples = tiles.filter(tile => !excluded.has(tile.contentId))
     const ids = new Set()
     const result = new Map()
     let index = 0
     const deadline = Date.now() + 1600
     async function worker() {
-        while (index < samples.length && Date.now() < deadline && ids.size < 12 && result.size < 8) {
+        while (index < samples.length && !signal?.aborted && Date.now() < deadline && ids.size < 12 && result.size < 8) {
             const order = index++
             const tile = samples[order]
             const direct = details(tile)
@@ -87,7 +87,7 @@ async function suggestedCreators(tiles, { details, owner, lookup, ignored, block
             if (blocked.some(entry => matchesCreator(entry, identity) ||
                 (!entry.id && entry.name && identity.name && entry.name.trim().toLowerCase() === identity.name.trim().toLowerCase()))) continue
             ids.add(id)
-            if (eligible && !await eligible(id)) continue
+            if (signal?.aborted || (eligible && !await eligible(id))) continue
             const response = await lookup(id).catch(() => undefined)
             const match = suggestion(response, id, tile)
             if (match) result.set(order, match)

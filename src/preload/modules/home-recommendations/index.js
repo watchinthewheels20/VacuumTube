@@ -7,7 +7,7 @@ const feed = require('./feed')
 const { channelDirectory, findField } = require('./channels')
 const { discover, discoveryVideos, creatorTile } = require('./creators')
 const { decorateThumbnails } = require('./flags')
-const { matchesRegion, regionalRows } = require('./regions')
+const { matchesRegion, cachedRegionalRows, regionalRows } = require('./regions')
 
 const english = require('../../../../locale/en.json').settings.home_recommendations
 const labels = () => locale.getLocale()?.settings.home_recommendations || english
@@ -55,6 +55,8 @@ module.exports = () => {
     let refreshTimer
     let latestUploads = new Set()
     let currentHome
+    let activeBrowse
+    let staged
     let lastInteraction = 0
     function onHomeRoute() {
         const hash = window.location?.hash || ''
@@ -64,6 +66,13 @@ module.exports = () => {
     }
     function updateHomeLayout() {
         document.documentElement.classList.toggle('vt-compact-home', onHomeRoute() && !isKids())
+        if (!onHomeRoute()) showRegionalLoading(false)
+    }
+    function showRegionalLoading(loading) {
+        if (typeof document !== 'undefined' && document.documentElement) {
+            if (loading) document.documentElement.setAttribute('data-vt-region-loading', labels().checking_region || english.checking_region)
+            else document.documentElement.removeAttribute('data-vt-region-loading')
+        }
     }
     function getDirectory(version) {
         if (!directory) {
@@ -94,8 +103,16 @@ module.exports = () => {
         clearInterval(refreshTimer)
         homeGeneration++
     }
-    window.addEventListener('hashchange', stopRefreshing)
-    window.addEventListener('pagehide', stopRefreshing)
+    window.addEventListener('hashchange', () => {
+        stopRefreshing()
+        // Native Home changes the hash during a browse. Keep that browse alive, but stop
+        // filling shelves when the user leaves for a player, search or another screen.
+        if (!onHomeRoute()) activeBrowse?.abort()
+    })
+    window.addEventListener('pagehide', () => {
+        stopRefreshing()
+        activeBrowse?.abort()
+    })
 
     // Only refresh a visible, idle Home, and only after its newest upload changes.
     // Leaving the route also releases the account-bound request callback.
@@ -106,7 +123,7 @@ module.exports = () => {
             if (document.querySelector('[role="dialog"], #vt-settings-overlay-root:not(.vt-settings-hidden), ytlr-overlay-panel-renderer')) return
             busy = true
             try {
-                const next = await load()
+                const next = await load(activeBrowse?.signal)
                 const id = next?.items[0]?.tileRenderer?.contentId
                 if (generation === homeGeneration && id && id !== firstId) {
                     commands.resolveCommand({ browseEndpoint: { browseId } })
@@ -130,7 +147,7 @@ module.exports = () => {
     }
 
     // Limit public lookups and how long Home waits for them. Missing countries stay neutral.
-    async function enrich(rows, preferUK) {
+    async function enrich(rows, preferUK, signal) {
         const candidates = rows.flatMap(row => row.items.map(feed.video).filter(Boolean))
         const hidden = blocked()
         const needsIdentity = tile => {
@@ -144,7 +161,7 @@ module.exports = () => {
         let index = 0
         const deadline = Date.now() + 1800
         async function work() {
-            while (index < queue.length && Date.now() < deadline) {
+            while (index < queue.length && !signal?.aborted && Date.now() < deadline) {
                 const tile = queue[index++]
                 const owner = details(tile)
                 const id = owner.id || (await directory.owner(tile.contentId))?.id
@@ -159,13 +176,30 @@ module.exports = () => {
         }
     }
 
+    function account(request, info) {
+        const config = window.ytcfg?.data_
+        return JSON.stringify([info.authenticated, config?.LOGGED_IN, config?.SESSION_INDEX,
+            config?.DELEGATED_SESSION_ID, request.context?.user])
+    }
+
     xhr.addRequestModifier((url, body, info) => {
         if (!isBrowse(url) || typeof body !== 'string') return body
         const request = JSON.parse(body)
         if (isKids(request)) return body
-        if (request.browseId) stopRefreshing()
-        if (request.browseId) currentHome = feed.feedSource(request) ? feed.regionalHomes[feed.regionFor(request)] || 'FEtopics' : undefined
-        if (info) info.homeGeneration = homeGeneration
+        if (request.browseId) {
+            stopRefreshing()
+            currentHome = feed.feedSource(request) ? feed.regionalHomes[feed.regionFor(request)] || 'FEtopics' : undefined
+            if (info && staged?.browseId === request.browseId && staged.until > Date.now() && staged.account === account(request, info)) {
+                info.homeStaged = staged.snapshot
+            } else {
+                if (info && staged?.browseId === request.browseId) info.skipHomeUpgrade = true
+                activeBrowse?.abort()
+                activeBrowse = new AbortController()
+            }
+            staged = undefined
+            if (typeof document !== 'undefined') showRegionalLoading(false)
+        }
+        if (info) info.homeSignal = activeBrowse?.signal
         return feed.prepareRequest(request, config.prefer_uk_creators) ? JSON.stringify(request) : body
     })
 
@@ -183,102 +217,180 @@ module.exports = () => {
         const region = feed.regionFor(request)
         // Leanback sends browseId "default" on startup and when navigating back to Home.
         if (request.browseId === 'default' && json.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer?.targetId !== 'browse-feedFEtopics') return
-        const generation = info.homeGeneration
-        const home = request.browseId && feed.sectionList(json)
+        const signal = info.homeSignal
+        if (signal?.aborted) return region ? '{}' : undefined
         getDirectory(request.context?.client?.clientVersion)
-        const rows = feed.lists(json)
-        for (const row of rows) row.items = row.items.map(item => {
-            const tile = feed.lockupTile(item.lockupViewModel, findField(item.lockupViewModel, 'menuRenderer'))
-            return tile ? { tileRenderer: tile } : item
-        })
-        const load = async () => {
-            const subscriptions = await info.subscriptions(request.context)
+        const interaction = lastInteraction
+        const hasHome = Boolean(request.browseId && Array.isArray(feed.sectionList(json)?.contents))
+        const load = async signal => {
+            const subscriptions = await info.subscriptions(request.context, signal)
             if (subscriptions?.contents) return feed.subscriptionList(subscriptions, config.hide_shorts)
         }
-        const loadFirstPage = Array.isArray(home?.contents) && (info.authenticated || window.ytcfg?.data_?.LOGGED_IN !== false)
-        const canDiscover = loadFirstPage && info.channel && info.related
-        const homeVideos = canDiscover ? discoveryVideos(home.contents) : []
-        const [uploads, history] = await Promise.all([
-            loadFirstPage ? load().catch(() => undefined) : undefined,
-            canDiscover ? info.history(request.context).catch(() => undefined) : undefined,
-            region ? undefined : enrich(rows, config.prefer_uk_creators && source === 'home')
-        ])
-        const seen = new Set(request.continuation && source === 'home' ? latestUploads : [])
+        function publish(snapshot) {
+            if (!signal?.aborted) {
+                if (hasHome) {
+                    latestUploads = snapshot.uploadIds
+                    creators.clear()
+                    for (const item of snapshot.suggestions) creators.set(item.id, item)
+                    if (snapshot.loadedUploads) watchUploads(load, snapshot.firstUpload, currentHome, homeGeneration)
+                } else if (source === 'uploads') {
+                    for (const id of snapshot.uploadIds) latestUploads.add(id)
+                }
+                for (const [id, card] of snapshot.cards) remember(id, card)
+            }
+            return JSON.stringify(snapshot.json)
+        }
+        if (info.homeStaged) return publish(info.homeStaged)
+
+        const loadFirstPage = hasHome && (info.authenticated || window.ytcfg?.data_?.LOGGED_IN !== false)
+        const canDiscover = loadFirstPage && info.channel && info.related && info.history
         const excluded = new Set([...(config.home_hidden_videos || []), ...(config.home_watched_videos || [])])
-        const options = { seen, blocked: blocked(), excluded, details, labels: labels(), remember, region }
-        const regionalContext = region && structuredClone(request.context)
-        if (regionalContext?.client) regionalContext.client.gl = region === 'UK' ? 'GB' : 'FR'
-        const filterRegion = (lists, isDiscovery) => regionalRows(lists, {
-            region, excluded,
+        const blockedCreators = blocked()
+        const discoveryContext = structuredClone(request.context)
+        if (discoveryContext?.client && (region || config.prefer_uk_creators)) {
+            discoveryContext.client.gl = region === 'EU' ? 'FR' : 'GB'
+        }
+        let countryFound
+        const regionalOptions = {
+            region, excluded, signal,
+            onMatch: () => countryFound?.(),
+            known: tile => {
+                const identity = details(tile)
+                if (!blockedCreators.some(entry => feed.matchesCreator(entry, identity))) return directory.knownCountry(identity.id)
+            },
             lookup: async tile => {
                 const id = details(tile).id || (await directory.owner(tile.contentId))?.id
-                if (id && !options.blocked.some(entry => feed.matchesCreator(entry, { ...details(tile), id }))) return directory.country(id)
-            },
-            continuation: info.continuation && (token => info.continuation(isDiscovery ? regionalContext : request.context, token)),
-            related: isDiscovery && info.related && (id => info.related(regionalContext, id))
-        })
-        const uploadVideos = uploads?.items.map(feed.video).filter(Boolean) || []
-        if (source === 'uploads') {
-            if (!json.continuationContents) return
-            const list = feed.subscriptionList(json, config.hide_shorts)
-            json.continuationContents = { horizontalListContinuation: list }
-            if (region) await filterRegion([list], false)
-            feed.rankList(list, 'uploads', options)
-            for (const id of seen) latestUploads.add(id)
-            return JSON.stringify(json)
-        }
-        if (home && generation === homeGeneration) latestUploads = new Set()
-        if (region) await Promise.all([filterRegion(rows, true), uploads && filterRegion([uploads], false)])
-        if (uploads) {
-            const firstId = uploadVideos[0]?.contentId
-            if (!region) await enrich([uploads], false)
-            feed.rankList(uploads, 'uploads', options)
-            if (generation === homeGeneration) {
-                latestUploads = new Set(seen)
-                watchUploads(load, firstId, feed.regionalHomes[region] || 'FEtopics', generation)
-            }
-            if (uploads.items.length || uploads.continuations?.length) {
-                const index = home.contents.findIndex(item => item.shelfRenderer || item.gridRenderer)
-                home.contents.splice(index < 0 ? home.contents.length : index, 0, feed.subscriptionShelf(uploads, labels().uploads))
+                if (!signal?.aborted && id && !blockedCreators.some(entry => feed.matchesCreator(entry, { ...details(tile), id }))) {
+                    return directory.country(id)
+                }
             }
         }
-        const titles = new Map()
-        for (const section of feed.sectionList(json)?.contents || []) {
-            const shelf = section.shelfRenderer
-            const heading = shelf?.headerRenderer?.shelfHeaderRenderer?.avatarLockup?.avatarLockupRenderer?.title || shelf?.title
-            if (heading) titles.set(shelf.content?.horizontalListRenderer, feed.text(heading))
-        }
-        for (const row of rows) {
-            feed.rankList(row, 'home', { ...options, remember: (id, card) => remember(id, { ...card, shelf: titles.get(row) }) })
-        }
-        if (home && generation === homeGeneration) creators.clear()
-        if (canDiscover && generation === homeGeneration) {
-            const discoveryContext = structuredClone(request.context)
-            if (config.prefer_uk_creators && discoveryContext.client) discoveryContext.client.gl = 'GB'
-            const suggestions = await discover({
-                history: discoveryVideos(history?.contents), uploads: uploadVideos, home: homeVideos,
-                related: id => info.related(discoveryContext, id),
-                details, owner: directory.owner, lookup: id => info.channel(request.context, id),
-                ignored: config.home_ignored_creators || [], blocked: options.blocked, excluded,
+        let uploads
+        const uploadsRequest = loadFirstPage && load(signal).then(result => { uploads = result }).catch(() => {})
+        const creatorRequest = canDiscover && (async () => {
+            const [history] = await Promise.all([info.history(request.context, signal).catch(() => undefined), uploadsRequest])
+            if (signal?.aborted) return []
+            return discover({
+                history: discoveryVideos(history?.contents), uploads: uploads?.items.map(feed.video).filter(Boolean) || [],
+                home: discoveryVideos(feed.sectionList(json)?.contents),
+                related: id => info.related(discoveryContext, id, signal),
+                details, owner: directory.owner, lookup: id => info.channel(request.context, id, signal),
+                ignored: config.home_ignored_creators || [], blocked: blockedCreators, excluded, signal,
                 eligible: region && (async id => matchesRegion(await directory.country(id), region))
-            }).catch(() => [])
-            if (suggestions.length && generation === homeGeneration) {
-                for (const item of suggestions) creators.set(item.id, item)
-                const row = feed.subscriptionShelf({ items: suggestions.map(creatorTile) }, labels().creators)
-                const firstDiscovery = home.contents.findIndex(entry => rows.includes(entry.shelfRenderer?.content?.horizontalListRenderer))
-                home.contents.splice(firstDiscovery < 0 ? home.contents.length : firstDiscovery + 1, 0, row)
-            }
-        }
-        const sections = feed.sectionList(json)
-        if (sections?.contents) sections.contents = sections.contents.filter(section => {
-            const list = section.shelfRenderer?.content?.horizontalListRenderer
-            if (region && !list && !section.gridRenderer && discoveryVideos(section).length) return false
-            return !list || list.items?.length || list.continuations?.length
-        })
-        feed.tagContinuations(feed.sectionList(json), source, region)
-        return JSON.stringify(json)
-    })
+            })
+        })().catch(() => [])
 
+        async function build(complete) {
+            const result = structuredClone(json)
+            const sections = feed.sectionList(result)
+            const rows = feed.lists(result)
+            for (const row of rows) row.items = row.items.map(item => {
+                const tile = feed.lockupTile(item?.lockupViewModel, findField(item?.lockupViewModel, 'menuRenderer'))
+                return tile ? { tileRenderer: tile } : item
+            })
+            async function regional(lists, isDiscovery) {
+                if (!complete) return cachedRegionalRows(lists, regionalOptions)
+                const context = isDiscovery ? discoveryContext : request.context
+                await regionalRows(lists, {
+                    ...regionalOptions,
+                    continuation: info.continuation && (token => info.continuation(context, token, signal)),
+                    related: isDiscovery && info.related && (id => info.related(context, id, signal))
+                })
+            }
+            const discovery = source === 'home' && (region
+                ? regional(rows, true)
+                : complete && enrich(rows, config.prefer_uk_creators, signal))
+            if (complete) await uploadsRequest
+            const uploadList = source === 'uploads' ? feed.subscriptionList(result, config.hide_shorts) : structuredClone(uploads)
+            const firstUpload = uploadList?.items[0]?.tileRenderer?.contentId
+            const subscriptions = uploadList && (region ? regional([uploadList], false) : complete && enrich([uploadList], false, signal))
+            await Promise.all([discovery, subscriptions])
+            const seen = new Set(request.continuation && source === 'home' ? latestUploads : [])
+            const cards = new Map()
+            const options = { seen, blocked: blockedCreators, excluded, details, labels: labels(), region,
+                remember: (id, info) => cards.set(id, info) }
+            if (uploadList) feed.rankList(uploadList, 'uploads', options)
+            const uploadIds = new Set(seen)
+            if (source === 'uploads') {
+                result.continuationContents = { horizontalListContinuation: uploadList }
+                return { json: result, cards, uploadIds, suggestions: [] }
+            }
+            if (hasHome && (uploadList?.items.length || uploadList?.continuations?.length)) {
+                const index = sections.contents.findIndex(item => item.shelfRenderer || item.gridRenderer)
+                sections.contents.splice(index < 0 ? sections.contents.length : index, 0, feed.subscriptionShelf(uploadList, labels().uploads))
+            }
+            const titles = new Map()
+            for (const section of sections?.contents || []) {
+                const shelf = section.shelfRenderer
+                const heading = shelf?.headerRenderer?.shelfHeaderRenderer?.avatarLockup?.avatarLockupRenderer?.title || shelf?.title
+                if (heading) titles.set(shelf.content?.horizontalListRenderer, feed.text(heading))
+            }
+            for (const row of rows) {
+                feed.rankList(row, 'home', { ...options, remember: (id, card) => cards.set(id, { ...card, shelf: titles.get(row) }) })
+            }
+            const suggestions = (complete && await creatorRequest) || []
+            if (suggestions.length) {
+                const row = feed.subscriptionShelf({ items: suggestions.map(creatorTile) }, labels().creators)
+                const firstDiscovery = sections.contents.findIndex(entry => rows.includes(entry.shelfRenderer?.content?.horizontalListRenderer))
+                sections.contents.splice(firstDiscovery < 0 ? sections.contents.length : firstDiscovery + 1, 0, row)
+            }
+            if (sections?.contents) sections.contents = sections.contents.filter(section => {
+                const list = section.shelfRenderer?.content?.horizontalListRenderer
+                if (region && !list && !section.gridRenderer && discoveryVideos(section).length) return false
+                return !list || list.items?.length || list.continuations?.length
+            })
+            feed.tagContinuations(sections, source, region)
+            return { json: result, cards, uploadIds, firstUpload, loadedUploads: Boolean(uploadList), suggestions }
+        }
+
+        if (source === 'uploads' && !json.continuationContents) return
+        const complete = build(true).catch(() => undefined)
+        let timer
+        let initial
+        const warmRegion = region && feed.lists(json).some(list => list.items.some(item => {
+            const tile = feed.video(item) || feed.lockupTile(item?.lockupViewModel)
+            return tile && !excluded.has(tile.contentId) && matchesRegion(regionalOptions.known(tile), region)
+        }))
+        const firstPaintBudget = warmRegion ? 80 : region ? 500 : 250
+        try {
+            // Only verified matches may render. Never wait for every country or optional shelf.
+            initial = await Promise.race([complete, new Promise(resolve => { timer = setTimeout(resolve, firstPaintBudget) })])
+        } finally { clearTimeout(timer) }
+        if (initial) return publish(initial)
+        const first = await build(false)
+        if (hasHome && !signal?.aborted && !info.skipHomeUpgrade && typeof document !== 'undefined') {
+            const browseId = feed.regionalHomes[region] || 'FEtopics'
+            const profile = account(request, info)
+            let visible = first
+            let coldTimer
+            function upgrade(snapshot) {
+                if (!snapshot || signal?.aborted || currentHome !== browseId || !onHomeRoute()) return
+                if (lastInteraction !== interaction && visible.cards.size) return
+                if (snapshot.cards.size <= visible.cards.size && snapshot.uploadIds.size <= visible.uploadIds.size &&
+                    snapshot.suggestions.length <= visible.suggestions.length) return
+                visible = snapshot
+                const pending = staged?.browseId === browseId && staged.until > Date.now()
+                staged = { snapshot, browseId, account: profile, until: Date.now() + 5000 }
+                if (!pending) commands.resolveCommand({ browseEndpoint: { browseId } })
+            }
+            if (region && !first.cards.size) {
+                showRegionalLoading(true)
+                countryFound = () => {
+                    if (coldTimer || visible.cards.size || signal?.aborted) return
+                    // Coalesce nearby checks into the first batch while the remaining shelves fill.
+                    coldTimer = setTimeout(() => {
+                        coldTimer = undefined
+                        if (!signal?.aborted) void build(false).then(upgrade).catch(() => {})
+                    }, 150)
+                }
+            }
+            void complete.then(upgrade).finally(() => {
+                clearTimeout(coldTimer)
+                if (region && !signal?.aborted) showRegionalLoading(false)
+            }).catch(() => {})
+        }
+        return publish(first)
+    })
     commands.addInputModifier(command => {
         const menu = command?.showMenuCommand
         if (menu && !isKids()) feed.watchedMenu(menu.menu?.menuRenderer?.items, menu.contentId, labels().watched)
