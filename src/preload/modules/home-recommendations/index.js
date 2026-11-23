@@ -216,6 +216,13 @@ module.exports = () => {
         if (!isBrowse(url) || typeof body !== 'string') return body
         const request = JSON.parse(body)
         if (isKids(request)) return body
+        const visibleRegion = feed.regionFor({ browseId: currentHome })
+        if (request.continuation && !feed.feedSource(request) && visibleRegion && onHomeRoute()) {
+            // Some server-generated shelves dispatch a raw continuation rather than
+            // the cursor tagged in our response. Bind it to the visible regional route.
+            request.continuation = 'vacuumtube.home.home.' + visibleRegion + '.' + request.continuation
+            if (info) info.body = JSON.stringify(request)
+        }
         if (request.browseId) {
             if (info) info.regionalKey = regionalKey(request, info)
             stopRefreshing()
