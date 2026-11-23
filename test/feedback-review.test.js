@@ -10,7 +10,7 @@ const { homeTileStyle, creator } = require('../src/preload/modules/home-recommen
 const { thumbnailId, decorateThumbnails } = require('../src/preload/modules/home-recommendations/flags')
 const labels = require('../locale/en.json').settings.home_recommendations
 const { filterGuide } = require('../src/preload/modules/sidebar')
-const { regionalRows, matchesRegion, fillRegionalPage } = require('../src/preload/modules/home-recommendations/regions')
+const { regionalRows, matchesRegion, fillRegionalPage, arrangeRegionalPage } = require('../src/preload/modules/home-recommendations/regions')
 const feed = require('../src/preload/modules/home-recommendations/feed')
 const channel = 'UC' + 'a'.repeat(22)
 const video = id => ({ tileRenderer: { contentType: 'TILE_CONTENT_TYPE_VIDEO', contentId: id, onSelectCommand: { watchEndpoint: { videoId: id } } } })
@@ -90,6 +90,38 @@ test('both regional pages fill six shelves from sparse Home, skipping duplicates
         assert.ok(tiles.every(tile => !seen.has(tile.contentId) && matchesRegion(country(tile), region)))
         assert.ok(sections.contents.some(section => section.shelfRenderer?.headerRenderer?.shelfHeaderRenderer?.avatarLockup?.avatarLockupRenderer?.title.runs[0].text === 'More native Home'))
     }
+})
+
+test('regional backfill publishes verified candidates while other searches are still pending', { timeout: 2000 }, async () => {
+    const firstMatch = Promise.withResolvers()
+    const slowSearch = Promise.withResolvers()
+    const sections = { contents: [] }
+    const items = Array.from({ length: 24 }, (_, i) => video(String(i + 1).padStart(11, '0')))
+    let requests = 0
+    const complete = fillRegionalPage(sections, {
+        region: 'UK', title: 'More from the UK',
+        known: () => undefined, lookup: async () => 'United Kingdom',
+        onMatch: firstMatch.resolve,
+        search: async () => ++requests === 1 ? { contents: items } : slowSearch.promise
+    })
+    try {
+        const first = await firstMatch.promise
+        assert.ok(items.some(item => item.tileRenderer === first))
+    } finally { slowSearch.resolve() }
+    await complete
+    assert.equal(sections.contents.length, 6)
+})
+
+test('a long shelf and a short paged shelf become six rows when 24 verified videos are already available', () => {
+    const items = Array.from({ length: 24 }, (_, i) => video(String(i + 1).padStart(11, '0')))
+    const sections = { contents: [
+        feed.subscriptionShelf({ items: items.slice(0, 22) }, 'Recommended'),
+        feed.subscriptionShelf({ items: items.slice(22), continuations: [{ nextContinuationData: { continuation: 'cursor' } }] }, 'Recently uploaded')
+    ] }
+    assert.equal(arrangeRegionalPage(sections, 'More from the UK', [], new Set()), 6)
+    const lists = feed.lists({ continuationContents: { sectionListContinuation: sections } })
+    assert.deepEqual(lists.map(list => list.items.length), [4, 4, 4, 4, 4, 4])
+    assert.equal(new Set(lists.flatMap(list => list.items.map(item => feed.video(item).contentId))).size, 24)
 })
 
 test('reinstalls prefer the established session and retain a legacy root profile in place', t => {

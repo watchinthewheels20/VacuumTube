@@ -7,7 +7,7 @@ const feed = require('./feed')
 const { channelDirectory, findField } = require('./channels')
 const { discover, discoveryVideos, creatorTile } = require('./creators')
 const { decorateThumbnails } = require('./flags')
-const { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage } = require('./regions')
+const { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage, arrangeRegionalPage, countFullRows, pageRows } = require('./regions')
 
 const english = require('../../../../locale/en.json').settings.home_recommendations
 const labels = () => locale.getLocale()?.settings.home_recommendations || english
@@ -62,6 +62,7 @@ module.exports = () => {
     let staged
     let refreshSequence = 0
     let lastInteraction = 0
+    const newRegionalParams = () => 'vacuumtube-region-refresh-' + ++refreshSequence
     function onHomeRoute() {
         const hash = window.location?.hash || ''
         const route = new URLSearchParams(hash.split('?')[1])
@@ -111,7 +112,14 @@ module.exports = () => {
         stopRefreshing()
         // Native Home changes the hash during a browse. Keep that browse alive, but stop
         // filling shelves when the user leaves for a player, search or another screen.
-        if (!onHomeRoute()) activeBrowse?.abort()
+        if (!onHomeRoute()) {
+            currentHome = undefined
+            activeBrowse?.abort()
+        }
+        const cached = regionalPages.get(feed.regionFor({ browseId: currentHome }))
+        if (cached?.loadUploads && cached.key === pageKey(regionalAccount) && cached.expires > Date.now()) {
+            watchUploads(cached.loadUploads, cached.snapshot.firstUpload, currentHome, homeGeneration)
+        }
     })
     window.addEventListener('pagehide', () => {
         stopRefreshing()
@@ -122,6 +130,7 @@ module.exports = () => {
     // Only refresh a visible, idle Home, and only after its newest upload changes.
     // Leaving the route also releases the account-bound request callback.
     function watchUploads(load, firstId, browseId, generation) {
+        clearInterval(refreshTimer)
         let busy = false
         refreshTimer = setInterval(async () => {
             if (busy || document.hidden || !document.hasFocus() || Date.now() - lastInteraction < 15000 || document.querySelector('video')?.paused === false) return
@@ -131,6 +140,7 @@ module.exports = () => {
                 const next = await load(activeBrowse?.signal)
                 const id = next?.items[0]?.tileRenderer?.contentId
                 if (generation === homeGeneration && id && id !== firstId) {
+                    regionalPages.delete(feed.regionFor({ browseId }))
                     commands.resolveCommand({ browseEndpoint: { browseId } })
                 }
             } catch { /* The next Home visit also checks for uploads. */ }
@@ -194,6 +204,10 @@ module.exports = () => {
             regionalPages.clear()
             regionalAccount = profile
         }
+        return pageKey(profile)
+    }
+
+    function pageKey(profile) {
         return JSON.stringify([profile, config.hide_shorts, config.prefer_uk_creators, config.home_hidden_videos, config.home_watched_videos,
             config.home_blocked_creators, config.home_ignored_creators])
     }
@@ -249,6 +263,11 @@ module.exports = () => {
         function publish(snapshot) {
             if (!signal?.aborted) {
                 if (hasHome) {
+                    const saved = region && regionalPages.get(region)
+                    if (saved?.key === info.regionalKey && snapshot.fullRows >= pageRows && request.params) {
+                        saved.routeParams = request.params
+                        if (snapshot.loadedUploads) saved.loadUploads = load
+                    }
                     latestUploads = snapshot.uploadIds
                     latestRegionalVideos = new Set(snapshot.cards.keys())
                     creators.clear()
@@ -264,10 +283,12 @@ module.exports = () => {
         }
         if (info.homeStaged) return publish(info.homeStaged)
         const previous = region && hasHome ? regionalPages.get(region) : undefined
-        const cachedPage = previous && previous.key === info.regionalKey && previous.expires > Date.now() ? previous : undefined
-        if (cachedPage?.snapshot) return publish(cachedPage.snapshot)
+        const saved = previous && previous.key === info.regionalKey && previous.expires > Date.now() ? previous : undefined
+        if (saved?.snapshot?.fullRows >= pageRows) return publish(saved.snapshot)
+        const cachedPage = saved && !saved.finished ? saved : undefined
         const page = region && hasHome
-            ? cachedPage || { key: info.regionalKey, controller: new AbortController(), expires: Date.now() + 120000 }
+            ? cachedPage || { key: info.regionalKey, controller: new AbortController(), expires: Date.now() + 120000,
+                tiles: new Map(saved?.tiles), snapshot: saved?.snapshot }
             : undefined
         if (page && !cachedPage) {
             previous?.controller.abort()
@@ -285,10 +306,16 @@ module.exports = () => {
             discoveryContext.client.gl = region === 'EU' ? 'FR' : 'GB'
         }
         let countryFound
+        const moreTitle = region === 'UK' ? labels().more_uk || english.more_uk : labels().more_europe || english.more_europe
         const regionalOptions = {
             region, excluded, signal: workSignal,
             allow: tile => !config.hide_shorts || tile.contentType === 'TILE_CONTENT_TYPE_VIDEO',
-            onMatch: () => countryFound?.(),
+            onMatch: tile => {
+                if (page) {
+                    if (page.tiles.size < 96 && !page.tiles.has(tile.contentId)) page.tiles.set(tile.contentId, structuredClone(tile))
+                    page.progress?.()
+                } else countryFound?.()
+            },
             known: tile => {
                 const identity = details(tile)
                 if (!blockedCreators.some(entry => feed.matchesCreator(entry, identity))) return directory.knownCountry(identity.id)
@@ -302,10 +329,11 @@ module.exports = () => {
         }
         let uploads
         const uploadsRequest = !cachedPage && loadFirstPage && load(workSignal).then(result => { uploads = result }).catch(() => {})
+        let readySuggestions = []
         const creatorRequest = !cachedPage && canDiscover && (async () => {
             const [history] = await Promise.all([info.history(request.context, workSignal).catch(() => undefined), uploadsRequest])
             if (workSignal?.aborted) return []
-            return discover({
+            readySuggestions = await discover({
                 history: discoveryVideos(history?.contents), uploads: uploads?.items.map(feed.video).filter(Boolean) || [],
                 home: discoveryVideos(feed.sectionList(json)?.contents),
                 related: id => info.related(discoveryContext, id, workSignal),
@@ -313,6 +341,7 @@ module.exports = () => {
                 ignored: config.home_ignored_creators || [], blocked: blockedCreators, excluded, signal: workSignal,
                 eligible: region && (async id => matchesRegion(await directory.country(id), region))
             })
+            return readySuggestions
         })().catch(() => [])
 
         async function build(complete) {
@@ -323,8 +352,21 @@ module.exports = () => {
                 const tile = feed.lockupTile(item?.lockupViewModel, findField(item?.lockupViewModel, 'menuRenderer'))
                 return tile ? { tileRenderer: tile } : item
             })
+            function regionalInventory() {
+                if (!page?.tiles.size) return []
+                const supplemental = { items: [...page.tiles.values()].map(tile => ({ tileRenderer: structuredClone(tile) })) }
+                cachedRegionalRows([supplemental], regionalOptions)
+                return supplemental.items
+            }
             async function regional(lists, isDiscovery) {
-                if (!complete) return cachedRegionalRows(lists, regionalOptions)
+                if (!complete) {
+                    cachedRegionalRows(lists, regionalOptions)
+                    if (isDiscovery && page?.tiles.size && Array.isArray(sections?.contents)) {
+                        arrangeRegionalPage(sections, moreTitle, regionalInventory(), new Set(seenRegional))
+                        rows = feed.lists(result)
+                    }
+                    return
+                }
                 const context = isDiscovery ? discoveryContext : request.context
                 const settings = {
                     ...regionalOptions,
@@ -332,9 +374,19 @@ module.exports = () => {
                     related: isDiscovery && info.related && ((id, signal = workSignal) => info.related(context, id, signal))
                 }
                 if (isDiscovery && Array.isArray(sections?.contents)) {
-                    const key = region === 'UK' ? 'more_uk' : 'more_europe'
-                    await fillRegionalPage(sections, { ...settings, title: labels()[key] || english[key], seen: seenRegional,
-                        search: info.regionalSearch && ((query, signal) => info.regionalSearch(context, query, signal)) })
+                    const requestedChannels = new Set()
+                    await fillRegionalPage(sections, { ...settings, title: moreTitle, seen: seenRegional,
+                        additional: page && regionalInventory,
+                        search: info.regionalSearch && ((query, signal) => info.regionalSearch(context, query, signal)),
+                        relatedChannels: page && info.channel && (signal => {
+                            const channels = new Set([...page.tiles.values()].map(tile => details(tile).id).filter(Boolean))
+                            return [...channels].filter(id => !requestedChannels.has(id)).slice(0, 5 - requestedChannels.size)
+                                .map(id => {
+                                    requestedChannels.add(id)
+                                    return () => info.channel(context, id, signal)
+                                })
+                        })
+                    })
                     rows = feed.lists(result)
                 } else await regionalRows(lists, settings)
             }
@@ -369,7 +421,8 @@ module.exports = () => {
             for (const row of rows) {
                 feed.rankList(row, 'home', { ...options, remember: (id, card) => cards.set(id, { ...card, shelf: titles.get(row) }) })
             }
-            const suggestions = (complete && await creatorRequest) || []
+            const fullRows = region && sections ? countFullRows(sections) : 0
+            const suggestions = (complete && await creatorRequest) || readySuggestions
             if (suggestions.length) {
                 const row = feed.subscriptionShelf({ items: suggestions.map(creatorTile) }, labels().creators)
                 const firstDiscovery = sections.contents.findIndex(entry => rows.includes(entry.shelfRenderer?.content?.horizontalListRenderer))
@@ -383,17 +436,21 @@ module.exports = () => {
                 return !list || list.items?.length || list.continuations?.length
             })
             feed.tagContinuations(sections, source, region)
-            return { json: result, cards, uploadIds, firstUpload, loadedUploads: Boolean(uploadList), suggestions }
+            return { json: result, cards, uploadIds, firstUpload, loadedUploads: Boolean(uploadList), suggestions, fullRows }
         }
 
         if (source === 'uploads' && !json.continuationContents) return
-        const complete = cachedPage?.promise || build(true).catch(() => undefined)
+        let complete = cachedPage?.promise || build(true).catch(() => undefined)
         if (page && !cachedPage) {
             page.promise = complete.then(snapshot => {
-                if (!workSignal.aborted && snapshot?.cards.size) page.snapshot = snapshot
+                page.finished = true
+                page.progress = undefined
+                if (!workSignal.aborted && snapshot?.cards.size &&
+                    (!page.snapshot || snapshot.fullRows >= page.snapshot.fullRows)) page.snapshot = snapshot
                 if (!page.snapshot && regionalPages.get(region) === page) regionalPages.delete(region)
-                return snapshot
+                return page.snapshot
             })
+            complete = page.promise
         }
         let initial
         const warmRegion = region && feed.lists(json).some(list => list.items.some(item => {
@@ -416,7 +473,8 @@ module.exports = () => {
         }
         if (signal?.aborted) return region ? '{}' : undefined
         if (initial) return publish(initial)
-        const first = await build(false)
+        const draft = await build(false)
+        const first = saved?.snapshot && saved.snapshot.fullRows >= draft.fullRows ? saved.snapshot : draft
         if (hasHome && !signal?.aborted && !info.skipHomeUpgrade && typeof document !== 'undefined') {
             const browseId = feed.regionalHomes[region] || 'FEtopics'
             const key = info.regionalKey
@@ -429,7 +487,7 @@ module.exports = () => {
             }, { once: true })
             function upgrade(snapshot) {
                 if (!snapshot || signal?.aborted || currentHome !== browseId || !onHomeRoute()) return
-                if (snapshot.cards.size <= visible.cards.size && snapshot.uploadIds.size <= visible.uploadIds.size &&
+                if (snapshot.fullRows <= visible.fullRows && snapshot.cards.size <= visible.cards.size && snapshot.uploadIds.size <= visible.uploadIds.size &&
                     snapshot.suggestions.length <= visible.suggestions.length) return
                 if (lastInteraction !== interaction && visible.cards.size) {
                     if (!region) return
@@ -446,20 +504,26 @@ module.exports = () => {
                 // Leanback caches browse routes by ID and params. Give an enriched
                 // regional page a fresh key, then strip it from the YouTube request.
                 let params
-                if (region) params = pending ? staged.params : 'vacuumtube-region-refresh-' + ++refreshSequence
+                if (region) params = pending ? staged.params : newRegionalParams()
                 staged = { snapshot, browseId, key, params, until: Date.now() + 5000 }
                 if (!pending) commands.resolveCommand({ browseEndpoint: { browseId, params } })
             }
-            if (region && !first.cards.size) {
-                showRegionalLoading(true)
+            if (region && first.fullRows < pageRows) {
+                if (!first.cards.size) showRegionalLoading(true)
                 countryFound = () => {
-                    if (coldTimer || visible.cards.size || signal?.aborted) return
-                    // Coalesce nearby checks into the first batch while the remaining shelves fill.
+                    if (coldTimer || signal?.aborted || visible.fullRows >= pageRows) return
                     coldTimer = setTimeout(() => {
                         coldTimer = undefined
-                        if (!signal?.aborted) void build(false).then(upgrade).catch(() => {})
-                    }, 150)
+                        if (!signal?.aborted) void build(false).then(snapshot => {
+                            if (!visible.cards.size || snapshot.fullRows >= visible.fullRows + 2 || snapshot.fullRows >= pageRows) {
+                                if (page && (!page.snapshot || snapshot.fullRows >= page.snapshot.fullRows)) page.snapshot = snapshot
+                                upgrade(snapshot)
+                            }
+                        }).catch(() => {})
+                    }, 300)
                 }
+                if (page) page.progress = countryFound
+                if (page?.tiles.size) countryFound()
             }
             void complete.then(upgrade).finally(() => {
                 clearTimeout(coldTimer)
@@ -483,6 +547,27 @@ module.exports = () => {
         }
     })
     commands.addInputModifier(command => {
+        const endpoint = command?.browseEndpoint
+        const region = feed.regionFor(endpoint)
+        if (region && !endpoint.params && !isKids()) {
+            const saved = regionalPages.get(region)
+            const reusable = saved?.routeParams && saved.key === pageKey(regionalAccount) &&
+                saved.expires > Date.now() && saved.snapshot?.fullRows >= pageRows
+            if (reusable && currentHome !== endpoint.browseId) {
+                // Leanback can reopen the completed native route without another request.
+                stopRefreshing()
+                activeBrowse?.abort()
+                activeBrowse = new AbortController()
+                currentHome = endpoint.browseId
+                latestUploads = saved.snapshot.uploadIds
+                latestRegionalVideos = new Set(saved.snapshot.cards.keys())
+                creators.clear()
+                for (const creator of saved.snapshot.suggestions) creators.set(creator.id, creator)
+                for (const [id, card] of saved.snapshot.cards) remember(id, card)
+                showRegionalLoading(false)
+            }
+            return { ...command, browseEndpoint: { ...endpoint, params: reusable ? saved.routeParams : newRegionalParams() } }
+        }
         const menu = command?.showMenuCommand
         if (menu && !isKids()) feed.watchedMenu(menu.menu?.menuRenderer?.items, menu.contentId, labels().watched)
         const refreshHome = () => commands.resolveCommand({ browseEndpoint: { browseId: currentHome || 'FEtopics' } })
