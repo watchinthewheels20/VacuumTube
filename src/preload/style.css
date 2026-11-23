@@ -25,6 +25,17 @@ body {
     z-index: 1;
 }
 
+html[data-vt-region-loading]::after {
+    content: attr(data-vt-region-loading);
+    position: fixed;
+    inset: 45% 10% auto;
+    color: white;
+    text-align: center;
+    font-size: 1rem;
+    pointer-events: none;
+    z-index: 10;
+}
+
 /* Compress the vertical track and its scroll offsets while retaining native card geometry. */
 .vt-compact-home ytlr-section-list-renderer > yt-virtual-list > div:has(> div > ytlr-shelf-renderer) {
     scale: 1 .82;

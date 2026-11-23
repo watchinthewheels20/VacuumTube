@@ -18,7 +18,21 @@ function nextToken(list) {
     return entry?.nextContinuationData?.continuation || entry?.reloadContinuationData?.continuation
 }
 
-async function regionalRows(rows, { region, lookup, continuation, excluded = new Set(), related }) {
+function regionalVideo(item) {
+    return video(item) || lockupTile(item?.lockupViewModel, findField(item?.lockupViewModel, 'menuRenderer'))
+}
+
+function cachedRegionalRows(rows, { region, known, excluded }) {
+    for (const list of rows) {
+        list.items = list.items.flatMap(item => {
+            const tile = regionalVideo(item)
+            return tile && !excluded.has(tile.contentId) && matchesRegion(known(tile), region)
+                ? [{ tileRenderer: tile }] : []
+        })
+    }
+}
+
+async function regionalRows(rows, { region, lookup, known = () => undefined, continuation, excluded = new Set(), related, signal, onMatch }) {
     const deadline = Date.now() + 6500
     const candidates = new Map()
     const queue = []
@@ -26,7 +40,7 @@ async function regionalRows(rows, { region, lookup, continuation, excluded = new
     function pump() {
         while (queue.length && active < 12) {
             const { tile, resolve } = queue.shift()
-            if (Date.now() >= deadline) {
+            if (signal?.aborted || Date.now() >= deadline) {
                 resolve()
                 continue
             }
@@ -43,17 +57,25 @@ async function regionalRows(rows, { region, lookup, continuation, excluded = new
         let index = 0
         let timer
         async function worker() {
-            while (index < items.length && Date.now() < deadline) {
+            while (index < items.length && !signal?.aborted && Date.now() < deadline) {
                 const slot = index++
                 const item = items[slot]
-                const tile = video(item) || lockupTile(item.lockupViewModel, findField(item.lockupViewModel, 'menuRenderer'))
+                const tile = regionalVideo(item)
                 if (!tile || excluded.has(tile.contentId) || state.ids.has(tile.contentId)) continue
                 state.ids.add(tile.contentId)
+                const country = known(tile)
+                if (country) {
+                    if (matchesRegion(country, region)) results[slot] = { tileRenderer: tile }
+                    continue
+                }
                 if (!candidates.has(tile.contentId)) candidates.set(tile.contentId, new Promise(resolve => {
                     queue.push({ tile, resolve })
                     pump()
                 }))
-                if (matchesRegion(await candidates.get(tile.contentId), region)) results[slot] = { tileRenderer: tile }
+                if (matchesRegion(await candidates.get(tile.contentId), region)) {
+                    results[slot] = { tileRenderer: tile }
+                    if (!signal?.aborted) onMatch?.()
+                }
             }
         }
         try {
@@ -66,7 +88,7 @@ async function regionalRows(rows, { region, lookup, continuation, excluded = new
     // Check the same shelf's subsequent pages first. Only discovery shelves can use related videos.
     await Promise.all(states.map(async state => {
         await filter(state, state.list.items)
-        for (let page = 0; page < 2 && state.accepted.length < 4 && Date.now() < deadline; page++) {
+        for (let page = 0; page < 2 && state.accepted.length < 4 && !signal?.aborted && Date.now() < deadline; page++) {
             const token = nextToken(state.list)
             if (!token || !continuation) break
             const response = await continuation(token).catch(() => undefined)
@@ -75,7 +97,7 @@ async function regionalRows(rows, { region, lookup, continuation, excluded = new
             state.list.continuations = next.continuations
             await filter(state, next.items)
         }
-        if (related && state.accepted.length < 4 && Date.now() < deadline) {
+        if (related && state.accepted.length < 4 && !signal?.aborted && Date.now() < deadline) {
             const seed = (state.accepted.map(video).find(Boolean) || state.seeds[0])?.contentId
             if (videoId.test(seed)) {
                 const result = await related(seed).catch(() => undefined)
@@ -87,4 +109,4 @@ async function regionalRows(rows, { region, lookup, continuation, excluded = new
     }))
 }
 
-module.exports = { matchesRegion, regionalRows }
+module.exports = { matchesRegion, cachedRegionalRows, regionalRows }

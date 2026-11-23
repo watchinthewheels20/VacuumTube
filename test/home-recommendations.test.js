@@ -112,7 +112,8 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     }
     const originalLoad = Module._load
     t.mock.method(Module, '_load', function (name, ...args) { return mocks[name] || originalLoad.call(this, name, ...args) })
-    const win = Object.assign(new EventTarget(), { fetch: async () => { throw Error('unexpected public request') } })
+    let publicFetch = async () => { throw Error('unexpected public request') }
+    const win = Object.assign(new EventTarget(), { fetch: (...args) => publicFetch(...args) })
     global.window = win
     t.after(() => { win.dispatchEvent(new Event('pagehide')); delete global.window })
     require('../src/preload/modules/home-recommendations')()
@@ -175,4 +176,28 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     assert.equal(commands[0].browseEndpoint.browseId, 'FEtopics')
     win.dispatchEvent(new Event('hashchange'))
     assert.equal(poll, null)
+
+    let finishCountry
+    const countryPending = new Promise(resolve => { finishCountry = resolve })
+    let publicRequests = 0
+    publicFetch = async (_url, request) => {
+        publicRequests++
+        if (JSON.parse(request.body).browseId) return Response.json({ header: { continuationCommand: { token: 'about' } } })
+        await countryPending
+        return Response.json({ onResponseReceivedEndpoints: [{ aboutChannelViewModel: { channelId: other, country: 'United Kingdom' } }] })
+    }
+    const regional = { browseId: feed.regionalHomes.UK }
+    commands.length = 0
+    const cold = await browse(regional, home, async () => undefined)
+    assert.equal(cold.sent.browseId, 'FEtopics')
+    assert.deepEqual(feed.lists(cold.json), [], 'an unresolved country never enters the first grid')
+    const pendingRequests = publicRequests
+    assert.ok(pendingRequests > 0)
+    await browse({ browseId: 'FEsubscriptions' })
+    finishCountry()
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(commands, [], 'a finished lookup never reopens a regional screen the user left')
+    const warm = await browse(regional, home, async () => undefined)
+    assert.deepEqual(feed.lists(warm.json).flatMap(row => row.items.map(i => i.tileRenderer.contentId)), [second])
+    assert.equal(publicRequests, pendingRequests, 'the warm country cache is shared across screens')
 })

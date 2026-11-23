@@ -24,7 +24,11 @@ function channelDirectory(fetchPublic, version) {
 
     function cached(store, key, load) {
         const entry = store.get(key)
-        if (entry && Date.now() < entry.expires) return entry.promise
+        if (entry && Date.now() < entry.expires) {
+            store.delete(key)
+            store.set(key, entry)
+            return entry.promise
+        }
         if (store.size >= 512) store.delete(store.keys().next().value)
         const next = { expires: Date.now() + 60000 }
         next.promise = load().then(value => {
@@ -34,6 +38,11 @@ function channelDirectory(fetchPublic, version) {
         }).catch(() => undefined)
         store.set(key, next)
         return next.promise
+    }
+
+    function known(store, id) {
+        const entry = store.get(id)
+        return entry?.expires > Date.now() ? entry.value : undefined
     }
 
     function owner(id) {
@@ -60,9 +69,9 @@ function channelDirectory(fetchPublic, version) {
 
     return {
         owner, country,
-        knownOwner: id => owners.get(id)?.value,
-        knownCountry: id => countries.get(id)?.value,
-        knownUK: id => countries.get(id)?.value === 'United Kingdom'
+        knownOwner: id => known(owners, id),
+        knownCountry: id => known(countries, id),
+        knownUK: id => known(countries, id) === 'United Kingdom'
     }
 }
 
