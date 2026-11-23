@@ -262,6 +262,7 @@
             "description": "YouTube for TV, on your PC",
             "version": "Version {version}",
             "platform_label": "Platform",
+            "distribution_label": "Distribution",
             "installation_label": "Installation",
             "update_method_label": "Update method",
             "view_github": "View on GitHub",

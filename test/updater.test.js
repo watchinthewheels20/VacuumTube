@@ -173,12 +173,12 @@ test('the settings overlay can ask whether auto updates apply to this install', 
     assert.equal(event.returnValue, false)
 })
 
-test('manual download links select stable platform artifacts', () => {
-    assert.match(getManualDownloadUrl('darwin', 'arm64'), /VacuumTube-universal\.dmg$/)
-    assert.match(getManualDownloadUrl('win32', 'arm64'), /VacuumTube-arm64-Portable\.zip$/)
-    assert.match(getManualDownloadUrl('win32', 'x64'), /VacuumTube-x64-Portable\.zip$/)
-    assert.match(getManualDownloadUrl('linux', 'x64'), /\/releases\/latest$/)
-    assert.match(getManualDownloadUrl('linux', 'x64', 'flatpak'), /flathub\.org\/apps\/rocks\.shy\.VacuumTube$/)
+test('download links open the fork release list, including Windows prereleases', () => {
+    const releases = 'https://github.com/watchinthewheels20/VacuumTube/releases'
+    assert.equal(getManualDownloadUrl('installer'), releases)
+    assert.equal(getManualDownloadUrl('portable'), releases)
+    assert.equal(getManualDownloadUrl(), releases)
+    assert.match(getManualDownloadUrl('flatpak'), /flathub\.org\/apps\/rocks\.shy\.VacuumTube$/)
 })
 
 test('packaged update checks publish the current version and open an allowlisted download', async () => {
@@ -208,7 +208,7 @@ test('packaged update checks publish the current version and open an allowlisted
 
     await harness.handlers.get('open-update-download')()
     assert.deepEqual(harness.openedUrls, [
-        getManualDownloadUrl(process.platform, process.arch, installationType)
+        getManualDownloadUrl(installationType)
     ])
 })
 

@@ -1,13 +1,10 @@
-# VacuumTube
+# VacuumTube Windows fork
 <p>
     <a href="https://github.com/shy1132/VacuumTube/stargazers">
       <img alt="Stars" title="Stars" src="https://img.shields.io/github/stars/shy1132/VacuumTube?style=shield&label=%E2%AD%90%20Stars&branch=main&kill_cache=1%22" />
     </a>
-    <a href="https://github.com/shy1132/VacuumTube/releases/latest">
-      <img alt="Latest Release" title="Latest Release" src="https://img.shields.io/github/v/release/shy1132/VacuumTube?style=shield&label=%F0%9F%9A%80%20Release">
-    </a>
-    <a href="https://klausenbusk.github.io/flathub-stats/#ref=rocks.shy.VacuumTube&interval=infinity&downloadType=installs%2Bupdates">
-      <img alt="Flathub Downloads" title="Flathub Downloads" src="https://img.shields.io/badge/dynamic/json?color=informational&label=Downloads&logo=flathub&logoColor=white&query=%24.installs_total&url=https%3A%2F%2Fflathub.org%2Fapi%2Fv2%2Fstats%2Frocks.shy.VacuumTube">
+    <a href="https://github.com/watchinthewheels20/VacuumTube/releases">
+      <img alt="Windows fork releases" title="Windows fork releases" src="https://img.shields.io/github/v/release/watchinthewheels20/VacuumTube?include_prereleases&amp;label=Windows%20fork">
     </a>
     <a href="https://github.com/shy1132/VacuumTube/blob/main/LICENSE">
       <img alt="License" title="License" src="https://img.shields.io/github/license/shy1132/VacuumTube?label=%F0%9F%93%9C%20License" />
@@ -30,38 +27,12 @@ If there's anything that you think makes it look lazy or half-baked, open an iss
 
 ## Installing
 
-### Windows
+Download **VacuumTube-Setup.exe** from the newest Windows prerelease. This fork publishes a Windows x64 installer. [Download the Windows fork](https://github.com/watchinthewheels20/VacuumTube/releases)
 
-If you don't know the difference, pick the Installer.
+Close VacuumTube before running the installer. If replacing a machine-wide installation, choose the same installation scope and folder so the Start menu opens the updated copy. Open **Settings → About** using the **?** button to check that **Distribution** shows `watchinthewheels20/VacuumTube`.
 
-- [Installer](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-Setup.exe)
-- Portable ZIP:
-  - [x64 / amd64](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-x64-Portable.zip)
-  - [Arm® 64](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-arm64-Portable.zip)
+This fork is based on the MIT-licensed VacuumTube project by shy1132. [Upstream project](https://github.com/shy1132/VacuumTube)
 
-### macOS
-
-Note that macOS builds are not yet signed, so they do not auto-update. For now, please periodically check for updates.
-
-- [Apple Silicon / M-series](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-arm64.dmg)
-- [Intel](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-x64.dmg)
-- [Universal](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-universal.dmg)
-
-### Linux
-
-In most cases, you very likely want to use the [Flatpak](https://flathub.org/apps/rocks.shy.VacuumTube), which works across all distributions and common architectures.
-
-Otherwise, you can use a distribution package or a portable one. If you don't know the difference, you likely want amd64.
-
-- amd64 / x86_64
-  - [AppImage](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-x86_64.AppImage)
-  - [Ubuntu/Debian/Mint (.deb)](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-amd64.deb)
-  - [tarball](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-x64.tar.gz)
-- Arm® 64 / aarch64
-  - [AppImage](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-arm64.AppImage)
-  - [Ubuntu/Debian/Mint (.deb)](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-arm64.deb)
-  - [tarball](https://github.com/shy1132/VacuumTube/releases/latest/download/VacuumTube-arm64.tar.gz)
- 
 ## Settings
 
 VacuumTube has some settings that you can change, which are located in the YouTube settings. They can also be opened by pressing `Ctrl+O` on your keyboard.
@@ -80,7 +51,7 @@ VacuumTube has some settings that you can change, which are located in the YouTu
   - Removes \"Super resolution\" (AI upscaled) qualities from low quality videos
 - Hide Shorts
   - Hides YouTube Shorts from the homepage
-- The sidebar contains Search, Home, Subscriptions, Library and Settings.
+- The sidebar contains Search, Home, UK, EU, Subscriptions, Library and Settings.
 - Unlock Resolution
   - Removes monitor resolution cap and allows you to watch videos at any resolution
 - Filter Video Codecs
