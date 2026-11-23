@@ -115,6 +115,26 @@ test('regional backfill uses personalised related videos without querying topics
     assert.equal(sections.contents.length, 6)
 })
 
+test('two full native shelves still backfill a whole page from personalised related recommendations', async () => {
+    const items = Array.from({ length: 24 }, (_, i) => video(String(i + 1).padStart(11, '0')))
+    const sections = { contents: [feed.subscriptionShelf({ items: items.slice(0, 4) }, 'Recommended'),
+        feed.subscriptionShelf({ items: items.slice(4, 8) }, 'Another native shelf')] }
+    let calls = 0
+    await fillRegionalPage(sections, { region: 'UK', title: 'More from the UK', known: () => 'United Kingdom',
+        lookup: async () => { throw Error('Known countries should be reused') },
+        related: async () => {
+            calls++
+            return { contents: { singleColumnWatchNextResults: { pivot: { sectionListRenderer: {
+                contents: [feed.subscriptionShelf({ items }, 'Related')]
+            } } } } }
+        }
+    })
+    const rows = feed.lists({ continuationContents: { sectionListContinuation: sections } })
+    assert.equal(calls, 3, 'stop the related backfill after the first sufficient batch')
+    assert.deepEqual(rows.map(row => row.items.length), [4, 4, 4, 4, 4, 4])
+    assert.equal(new Set(rows.flatMap(row => row.items.map(item => feed.video(item).contentId))).size, 24)
+})
+
 test('a long shelf and a short paged shelf become six rows when 24 verified videos are already available', () => {
     const items = Array.from({ length: 24 }, (_, i) => video(String(i + 1).padStart(11, '0')))
     const sections = { contents: [

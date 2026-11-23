@@ -24,6 +24,11 @@ function regionalVideo(item) {
     return video(item) || lockupTile(item?.lockupViewModel, findField(item?.lockupViewModel, 'menuRenderer'))
 }
 
+function relatedItems(result) {
+    const shelves = result?.contents?.singleColumnWatchNextResults?.pivot?.sectionListRenderer?.contents || []
+    return shelves.flatMap(shelf => shelf.shelfRenderer?.content?.horizontalListRenderer?.items || [])
+}
+
 function cachedRegionalRows(rows, { region, known, excluded, allow = () => true }) {
     for (const list of rows) {
         list.items = list.items.flatMap(item => {
@@ -109,8 +114,7 @@ async function regionalRows(rows, { region, lookup, known = () => undefined, con
             const seed = (state.accepted.map(video).find(Boolean) || state.seeds[0])?.contentId
             if (videoId.test(seed)) {
                 const result = await related(seed, signal).catch(() => undefined)
-                const shelves = result?.contents?.singleColumnWatchNextResults?.pivot?.sectionListRenderer?.contents || []
-                await filter(state, shelves.flatMap(shelf => shelf.shelfRenderer?.content?.horizontalListRenderer?.items || []).slice(0, 24))
+                await filter(state, relatedItems(result).slice(0, 24))
             }
         }
         state.list.items = state.accepted
@@ -169,6 +173,7 @@ function uniqueRegionalItems(items, seen) {
 }
 
 async function fillRegionalPage(sections, { title, additional, seen = new Set(), ...options }) {
+    const started = Date.now()
     const initial = sectionRows(sections)
     const background = AbortSignal.timeout(15000)
     const signal = options.signal ? AbortSignal.any([options.signal, background]) : background
@@ -177,14 +182,16 @@ async function fillRegionalPage(sections, { title, additional, seen = new Set(),
         if (!seen.has(tile.contentId)) verified.add(tile.contentId)
         options.onMatch?.(tile)
     } }
+    const hasPage = () => [...verified].filter(id => !seen.has(id)).length >= pageRows * cardsAcross
     const extra = []
+    const supplemental = []
     const first = regionalRows(initial, scoped)
 
     // Prepare additional native Home shelves in order, even if the original grid is sparse.
     const later = (async () => {
         if (!options.continuation) return
         const visited = new Set()
-        for (let i = 0; i < 3 && !signal.aborted && verified.size < pageRows * cardsAcross; i++) {
+        for (let i = 0; i < 3 && !signal.aborted && !hasPage(); i++) {
             const cursor = nextToken(sections)
             if (!cursor || visited.has(cursor)) break
             visited.add(cursor)
@@ -197,9 +204,26 @@ async function fillRegionalPage(sections, { title, additional, seen = new Set(),
         }
     })()
 
-    await Promise.all([first, later])
+    // A few complete shelves still leave a short page. Expand personalised related
+    // recommendations in parallel with native Home paging, never a channel's uploads.
+    const related = first.then(async () => {
+        if (!options.related) return
+        const seeds = [...new Set([
+            ...initial.map(list => video(list.items[0])?.contentId),
+            ...initial.flatMap(list => list.items.map(item => video(item)?.contentId))
+        ].filter(id => videoId.test(id)))]
+        for (let start = 0; start < Math.min(seeds.length, 6) && !signal.aborted && !hasPage(); start += 3) {
+            const responses = await Promise.all(seeds.slice(start, start + 3).map(id => options.related(id, signal).catch(() => undefined)))
+            const batch = { items: responses.flatMap(result => relatedItems(result).slice(0, 24)) }
+            await regionalRows([batch], { ...scoped, related: undefined, continuation: undefined,
+                budget: Math.min(3600, Math.max(0, 15000 - (Date.now() - started))) })
+            supplemental.push(...batch.items)
+        }
+    })
+
+    await Promise.all([first, later, related])
     sections.contents.push(...extra)
-    arrangeRegionalPage(sections, title, additional?.() || [], new Set(seen))
+    arrangeRegionalPage(sections, title, [...supplemental, ...(additional?.() || [])], new Set(seen))
 }
 
 module.exports = { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage, arrangeRegionalPage, countFullRows, pageRows }

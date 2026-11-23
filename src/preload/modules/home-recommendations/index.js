@@ -303,6 +303,7 @@ module.exports = () => {
         }
         const workSignal = page?.controller.signal || signal
         const seenRegional = new Set(region && !hasHome ? latestRegionalVideos : [])
+        const discoverySeen = new Set(seenRegional)
 
         const loadFirstPage = hasHome && (info.authenticated || window.ytcfg?.data_?.LOGGED_IN !== false)
         const canDiscover = loadFirstPage && info.channel && info.related && info.history
@@ -333,7 +334,13 @@ module.exports = () => {
             }
         }
         let uploads
-        const uploadsRequest = !cachedPage && loadFirstPage && load(workSignal).then(result => { uploads = result }).catch(() => {})
+        const uploadsRequest = !cachedPage && loadFirstPage && load(workSignal).then(result => {
+            uploads = result
+            for (const item of result?.items || []) {
+                const id = feed.video(item)?.contentId
+                if (id) discoverySeen.add(id)
+            }
+        }).catch(() => {})
         let readySuggestions = []
         const creatorRequest = !cachedPage && canDiscover && (async () => {
             const [history] = await Promise.all([info.history(request.context, workSignal).catch(() => undefined), uploadsRequest])
@@ -379,7 +386,7 @@ module.exports = () => {
                     related: isDiscovery && info.related && ((id, signal = workSignal) => info.related(context, id, signal))
                 }
                 if (isDiscovery && Array.isArray(sections?.contents)) {
-                    await fillRegionalPage(sections, { ...settings, title: moreTitle, seen: seenRegional,
+                    await fillRegionalPage(sections, { ...settings, title: moreTitle, seen: discoverySeen,
                         additional: page && regionalInventory
                     })
                     rows = feed.lists(result)
