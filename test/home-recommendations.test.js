@@ -243,6 +243,11 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
         assert.deepEqual(list.items.map(entry => entry.tileRenderer.contentId), accepted)
         assert.ok(list.items.every(entry => entry.tileRenderer.style === feed.homeTileStyle))
         assert.equal(list.continuations[0].nextContinuationData.continuation, 'vacuumtube.home.home.' + region + '.later')
+        const raw = await browse({ continuation: 'server-added-shelf' }, {
+            continuationContents: { horizontalListContinuation: { items: batch } }
+        })
+        assert.deepEqual(feed.lists(raw.json)[0].items.map(entry => entry.tileRenderer.contentId), [],
+            'server-generated raw shelf continuations remain filtered and cannot reintroduce seen videos')
         const unsupported = await browse(more, { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: batch } }] })
         assert.deepEqual(unsupported.json, { continuationContents: { horizontalListContinuation: { items: [] } } })
         t.mock.method(console, 'warn', () => {})
