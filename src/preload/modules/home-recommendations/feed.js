@@ -4,6 +4,7 @@ const homeIds = new Set(['default', 'FEtopics', 'FEwhat_to_watch'])
 const prefix = 'vacuumtube.home.'
 const regionalHomes = { UK: 'FEvacuumtube_uk', EU: 'FEvacuumtube_eu' }
 const continuationTag = /^vacuumtube\.home\.(home|uploads)\.(?:(UK|EU)\.)?/
+const regionalRefresh = /^vacuumtube-region-refresh-\d+$/
 // Leanback's compact widescreen tile has a fixed native slot on focus and blur.
 const homeTileStyle = 'TILE_STYLE_YTLR_EDU'
 
@@ -22,7 +23,10 @@ function prepareRequest(request, preferUK) {
     if (!source) return false
     const region = regionFor(request)
     if (request.continuation) request.continuation = request.continuation.replace(continuationTag, '')
-    if (region && request.browseId) request.browseId = 'FEtopics'
+    if (region && request.browseId) {
+        request.browseId = 'FEtopics'
+        if (regionalRefresh.test(request.params)) delete request.params
+    }
     if (source === 'home' && request.context?.client && (region || preferUK)) request.context.client.gl = region === 'EU' ? 'FR' : 'GB'
     return true
 }
@@ -59,6 +63,24 @@ function lists(json) {
     return (sectionList(json)?.contents || []).map(section =>
         section?.shelfRenderer?.content?.horizontalListRenderer || section?.gridRenderer
     ).filter(list => Array.isArray(list?.items))
+}
+
+// An unsupported or failed regional response must not fall back to unfiltered videos.
+function emptyRegionalResponse(request, json) {
+    if (request.continuation) {
+        const next = json?.continuationContents
+        if (next?.tvSurfaceContentContinuation) {
+            return { continuationContents: { tvSurfaceContentContinuation: { content: {
+                sectionListRenderer: { contents: [] }
+            } } } }
+        }
+        if (next?.sectionListContinuation) return { continuationContents: { sectionListContinuation: { contents: [] } } }
+        const kind = next?.gridContinuation && feedSource(request) !== 'uploads' ? 'gridContinuation' : 'horizontalListContinuation'
+        return { continuationContents: { [kind]: { items: [] } } }
+    }
+    return { contents: { tvBrowseRenderer: { content: { tvSurfaceContentRenderer: {
+        targetId: 'browse-feedFEtopics', content: { sectionListRenderer: { contents: [] } }
+    } } } } }
 }
 
 function video(item) {
@@ -186,4 +208,4 @@ function rankList(list, source, { seen, blocked, excluded, details, labels, reme
     tagContinuations(list, source, region)
 }
 
-module.exports = { channelId, videoId, homeTileStyle, regionalHomes, regionFor, feedSource, prepareRequest, tagContinuations, sectionList, lists, video, lockupTile, watchedMenu, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }
+module.exports = { channelId, videoId, homeTileStyle, regionalHomes, regionFor, feedSource, prepareRequest, tagContinuations, sectionList, lists, emptyRegionalResponse, video, lockupTile, watchedMenu, text, creator, matchesCreator, subscriptionList, subscriptionShelf, rankList }

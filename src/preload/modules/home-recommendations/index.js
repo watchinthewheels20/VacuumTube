@@ -60,6 +60,7 @@ module.exports = () => {
     let currentHome
     let activeBrowse
     let staged
+    let refreshSequence = 0
     let lastInteraction = 0
     function onHomeRoute() {
         const hash = window.location?.hash || ''
@@ -205,7 +206,8 @@ module.exports = () => {
             if (info) info.regionalKey = regionalKey(request, info)
             stopRefreshing()
             currentHome = feed.feedSource(request) ? feed.regionalHomes[feed.regionFor(request)] || 'FEtopics' : undefined
-            if (info && staged?.browseId === request.browseId && staged.until > Date.now() && staged.key === info.regionalKey) {
+            if (info && staged?.browseId === request.browseId && (!staged.params || staged.params === request.params) &&
+                staged.until > Date.now() && staged.key === info.regionalKey) {
                 info.homeStaged = staged.snapshot
             } else {
                 if (info && staged?.browseId === request.browseId) info.skipHomeUpgrade = true
@@ -219,11 +221,8 @@ module.exports = () => {
         return feed.prepareRequest(request, config.prefer_uk_creators) ? JSON.stringify(request) : body
     })
 
-    xhr.addResponseModifier(async (url, text, info) => {
-        if (!/^(?:https:\/\/www\.youtube\.com)?\/youtubei\/v1\/(?:browse|next|search)(?:\?|$)/.test(url) || isKids()) return
-        const json = JSON.parse(text)
+    async function modifyFeed(url, json, request, info) {
         if (json.error) return
-        const request = info && JSON.parse(info.body)
         if (isKids(request)) return
         const source = isBrowse(url) && feed.feedSource(request)
         if (!source) {
@@ -234,10 +233,15 @@ module.exports = () => {
         // Leanback sends browseId "default" on startup and when navigating back to Home.
         if (request.browseId === 'default' && json.contents?.tvBrowseRenderer?.content?.tvSurfaceContentRenderer?.targetId !== 'browse-feedFEtopics') return
         const signal = info.homeSignal
-        if (signal?.aborted) return region ? '{}' : undefined
+        if (signal?.aborted || (region && request.continuation && currentHome !== feed.regionalHomes[region])) {
+            return region ? JSON.stringify(feed.emptyRegionalResponse(request, json)) : undefined
+        }
         getDirectory(request.context?.client?.clientVersion)
         const interaction = lastInteraction
         const hasHome = Boolean(request.browseId && Array.isArray(feed.sectionList(json)?.contents))
+        if (region && (request.browseId ? !hasHome : !feed.sectionList(json) && !feed.lists(json).length)) {
+            return JSON.stringify(feed.emptyRegionalResponse(request, json))
+        }
         const load = async signal => {
             const subscriptions = await info.subscriptions(request.context, signal)
             if (subscriptions?.contents) return feed.subscriptionList(subscriptions, config.hide_shorts)
@@ -259,10 +263,12 @@ module.exports = () => {
             return JSON.stringify(snapshot.json)
         }
         if (info.homeStaged) return publish(info.homeStaged)
-        const previous = region && hasHome && regionalPages.get(region)
+        const previous = region && hasHome ? regionalPages.get(region) : undefined
         const cachedPage = previous && previous.key === info.regionalKey && previous.expires > Date.now() ? previous : undefined
         if (cachedPage?.snapshot) return publish(cachedPage.snapshot)
-        const page = region && hasHome && (cachedPage || { key: info.regionalKey, controller: new AbortController(), expires: Date.now() + 120000 })
+        const page = region && hasHome
+            ? cachedPage || { key: info.regionalKey, controller: new AbortController(), expires: Date.now() + 120000 }
+            : undefined
         if (page && !cachedPage) {
             previous?.controller.abort()
             regionalPages.set(region, page)
@@ -350,7 +356,7 @@ module.exports = () => {
                 result.continuationContents = { horizontalListContinuation: uploadList }
                 return { json: result, cards, uploadIds, suggestions: [] }
             }
-            if (hasHome && (uploadList?.items.length || uploadList?.continuations?.length)) {
+            if (hasHome && (uploadList?.items.length || (!region && uploadList?.continuations?.length))) {
                 const index = sections.contents.findIndex(item => item.shelfRenderer || item.gridRenderer)
                 sections.contents.splice(index < 0 ? sections.contents.length : index, 0, feed.subscriptionShelf(uploadList, labels().uploads))
             }
@@ -370,8 +376,10 @@ module.exports = () => {
                 sections.contents.splice(firstDiscovery < 0 ? sections.contents.length : firstDiscovery + 1, 0, row)
             }
             if (sections?.contents) sections.contents = sections.contents.filter(section => {
-                const list = section.shelfRenderer?.content?.horizontalListRenderer
-                if (region && !list && !section.gridRenderer && discoveryVideos(section).length) return false
+                const list = section.shelfRenderer?.content?.horizontalListRenderer || section.gridRenderer
+                // Native creates permanent skeleton cards for a horizontal shelf with
+                // an empty list and a cursor. Keep the vertical cursor for later rows.
+                if (region) return Boolean(list?.items?.length)
                 return !list || list.items?.length || list.continuations?.length
             })
             feed.tagContinuations(sections, source, region)
@@ -435,8 +443,12 @@ module.exports = () => {
                 }
                 visible = snapshot
                 const pending = staged?.browseId === browseId && staged.until > Date.now()
-                staged = { snapshot, browseId, key, until: Date.now() + 5000 }
-                if (!pending) commands.resolveCommand({ browseEndpoint: { browseId } })
+                // Leanback caches browse routes by ID and params. Give an enriched
+                // regional page a fresh key, then strip it from the YouTube request.
+                let params
+                if (region) params = pending ? staged.params : 'vacuumtube-region-refresh-' + ++refreshSequence
+                staged = { snapshot, browseId, key, params, until: Date.now() + 5000 }
+                if (!pending) commands.resolveCommand({ browseEndpoint: { browseId, params } })
             }
             if (region && !first.cards.size) {
                 showRegionalLoading(true)
@@ -455,6 +467,20 @@ module.exports = () => {
             }).catch(() => {})
         }
         return publish(first)
+    }
+
+    xhr.addResponseModifier(async (url, text, info) => {
+        if (!/^(?:https:\/\/www\.youtube\.com)?\/youtubei\/v1\/(?:browse|next|search)(?:\?|$)/.test(url) || isKids()) return
+        const request = info && JSON.parse(info.body)
+        let json
+        try {
+            json = JSON.parse(text)
+            return await modifyFeed(url, json, request, info)
+        } catch (error) {
+            if (!isBrowse(url) || isKids(request) || !feed.regionFor(request)) throw error
+            console.warn('[regional Home] Could not render a filtered response:', error.name)
+            return JSON.stringify(feed.emptyRegionalResponse(request, json))
+        }
     })
     commands.addInputModifier(command => {
         const menu = command?.showMenuCommand
