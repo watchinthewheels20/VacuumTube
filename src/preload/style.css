@@ -38,7 +38,7 @@ html[data-vt-region-loading]::after {
 
 /* Compress the vertical track and its scroll offsets while retaining native card geometry. */
 .vt-compact-home {
-    --vt-home-row-scale: .66;
+    --vt-home-row-scale: .72;
 }
 
 .vt-compact-home ytlr-section-list-renderer > yt-virtual-list > div:has(> div > ytlr-shelf-renderer) {
