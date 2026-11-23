@@ -72,17 +72,17 @@ test('both regional pages fill six shelves from sparse Home, skipping duplicates
         }
         const seen = new Set(['00000000002'])
         const calls = []
-        let searches = 0
         await fillRegionalPage(sections, { region, title, seen, known: country, lookup: async () => undefined,
             continuation: async token => {
                 calls.push(token)
                 return { continuationContents: { sectionListContinuation: {
-                    contents: [feed.subscriptionShelf({ items: ids(4, 10) }, 'More native Home')]
+                    contents: [feed.subscriptionShelf({ items: ids(4, 60) }, 'More native Home')],
+                    continuations: [{ nextContinuationData: { continuation: 'unneeded-page' } }]
                 } } }
-            }, search: async () => ({ contents: ids(14 + searches++ * 14, 14) })
+            }
         })
         assert.deepEqual(calls, ['next-home'])
-        assert.equal(sections.continuations, undefined)
+        assert.equal(sections.continuations[0].nextContinuationData.continuation, 'unneeded-page')
         const rows = feed.lists({ continuationContents: { sectionListContinuation: sections } })
         const tiles = rows.flatMap(row => row.items.map(feed.video))
         assert.ok(rows.filter(row => row.items.length >= 4).length >= 6)
@@ -92,22 +92,25 @@ test('both regional pages fill six shelves from sparse Home, skipping duplicates
     }
 })
 
-test('regional backfill publishes verified candidates while other searches are still pending', { timeout: 2000 }, async () => {
+test('regional backfill uses personalised related videos without querying topics or bulk channel uploads', { timeout: 2000 }, async () => {
     const firstMatch = Promise.withResolvers()
-    const slowSearch = Promise.withResolvers()
-    const sections = { contents: [] }
+    const sections = { contents: [feed.subscriptionShelf({ items: [video('00000000099')] }, 'Recommended')] }
     const items = Array.from({ length: 24 }, (_, i) => video(String(i + 1).padStart(11, '0')))
-    let requests = 0
     const complete = fillRegionalPage(sections, {
         region: 'UK', title: 'More from the UK',
-        known: () => undefined, lookup: async () => 'United Kingdom',
+        known: () => undefined, lookup: async tile => tile.contentId === '00000000099' ? undefined : 'United Kingdom',
         onMatch: firstMatch.resolve,
-        search: async () => ++requests === 1 ? { contents: items } : slowSearch.promise
+        related: async id => {
+            assert.equal(id, '00000000099')
+            return { contents: { singleColumnWatchNextResults: { pivot: { sectionListRenderer: {
+                contents: [feed.subscriptionShelf({ items }, 'Related')]
+            } } } } }
+        },
+        search: () => { throw Error('Unsolicited topic search') },
+        relatedChannels: () => { throw Error('Unsolicited channel backfill') }
     })
-    try {
-        const first = await firstMatch.promise
-        assert.ok(items.some(item => item.tileRenderer === first))
-    } finally { slowSearch.resolve() }
+    const first = await firstMatch.promise
+    assert.ok(items.some(item => item.tileRenderer === first))
     await complete
     assert.equal(sections.contents.length, 6)
 })

@@ -10,15 +10,6 @@ countries.set('Macedonia', 'MK')
 
 const pageRows = 6
 const cardsAcross = 4
-const searches = {
-    UK: ['UK documentary nature history', 'British science technology explainers', 'UK cooking travel', 'British arts music culture',
-        'UK local history independent documentary', 'UK wildlife countryside walking',
-        'BBC News UK politics', 'ITV News UK', 'Auto Shenanigans UK roads'],
-    EU: ['European documentary nature history', 'France science documentaire', 'Deutschland Technik Wissenschaft',
-        'España viajes cultura', 'Italia cucina tradizionale', 'Polska przyroda reportaż',
-        'UK documentary nature history', 'ARTE Reportage Europe', 'Deutsche Welle Europa']
-}
-
 function matchesRegion(country, region) {
     const code = countries.get(country) || country
     return region === 'UK' ? code === 'GB' : region === 'EU' && europe.has(code)
@@ -126,14 +117,6 @@ async function regionalRows(rows, { region, lookup, known = () => undefined, con
     }))
 }
 
-function searchTiles(node, items = []) {
-    if (!node || typeof node !== 'object' || node.adSlotRenderer || node.promotedVideoRenderer) return items
-    const tile = regionalVideo(node)
-    if (tile) items.push({ tileRenderer: tile })
-    else for (const child of Object.values(node)) searchTiles(child, items)
-    return items
-}
-
 function sectionRows(sections) {
     return lists({ continuationContents: { sectionListContinuation: sections } })
 }
@@ -185,11 +168,15 @@ function uniqueRegionalItems(items, seen) {
     })
 }
 
-async function fillRegionalPage(sections, { title, search, relatedChannels, additional, seen = new Set(), ...options }) {
+async function fillRegionalPage(sections, { title, additional, seen = new Set(), ...options }) {
     const initial = sectionRows(sections)
     const background = AbortSignal.timeout(15000)
     const signal = options.signal ? AbortSignal.any([options.signal, background]) : background
-    const scoped = { ...options, signal }
+    const verified = new Set()
+    const scoped = { ...options, signal, onMatch: tile => {
+        if (!seen.has(tile.contentId)) verified.add(tile.contentId)
+        options.onMatch?.(tile)
+    } }
     const extra = []
     const first = regionalRows(initial, scoped)
 
@@ -197,7 +184,7 @@ async function fillRegionalPage(sections, { title, search, relatedChannels, addi
     const later = (async () => {
         if (!options.continuation) return
         const visited = new Set()
-        for (let i = 0; i < 3 && !signal.aborted; i++) {
+        for (let i = 0; i < 3 && !signal.aborted && verified.size < pageRows * cardsAcross; i++) {
             const cursor = nextToken(sections)
             if (!cursor || visited.has(cursor)) break
             visited.add(cursor)
@@ -207,50 +194,12 @@ async function fillRegionalPage(sections, { title, search, relatedChannels, addi
             await regionalRows(sectionRows({ contents: candidates }), { ...scoped, related: undefined, budget: 2600, concurrency: 6 })
             extra.push(...candidates)
             sections.continuations = next.continuations
-            if (extra.filter(section => sectionRows({ contents: [section] })[0].items.length >= cardsAcross).length >= pageRows) break
         }
     })()
 
-    // Search supplies a wider candidate pool when Home is too narrow. Country lookup is
-    // still mandatory, and native recommendations stay ahead of search results.
-    const more = []
-    const count = () => {
-        const verified = structuredClone({ contents: [...sections.contents, ...extra] })
-        cachedRegionalRows(sectionRows(verified), { ...options, known: options.known || (() => undefined), excluded: options.excluded || new Set() })
-        return arrangeRegionalPage(verified, title, [...more, ...(additional?.() || [])], new Set(seen))
-    }
-    function addMore(batch) {
-        const known = new Set([...seen, ...more.map(item => video(item).contentId)])
-        more.push(...uniqueRegionalItems(batch.flatMap(row => row.items), known))
-    }
-    async function collect(load, limit) {
-        const candidates = searchTiles((await load())?.contents)
-        const eligible = item => matchesRegion(options.known?.(video(item)), options.region)
-        const batch = { items: [...candidates.filter(eligible), ...candidates.filter(item => !eligible(item))].slice(0, limit) }
-        await regionalRows([batch], { ...scoped, related: undefined, continuation: undefined, budget: 3600, concurrency: 4 })
-        return batch
-    }
-    async function expandChannels() {
-        if (signal.aborted || count() >= pageRows) return
-        addMore(await Promise.all(relatedChannels(signal).map(load => collect(() => load().catch(() => undefined), 12))))
-    }
-    // Start fetching uploads from already verified channels while search candidates are
-    // still being checked. Their other videos often need no new country lookup.
-    let channelTimer
-    const earlyChannels = relatedChannels && Promise.race([first, new Promise(resolve => {
-        channelTimer = setTimeout(resolve, 1000)
-    })]).finally(() => clearTimeout(channelTimer)).then(expandChannels)
-    if (search && searches[options.region]) {
-        const queries = searches[options.region]
-        for (let start = 0; start < queries.length; start += 3) {
-            if (signal.aborted || count() >= pageRows) break
-            addMore(await Promise.all(queries.slice(start, start + 3).map(query => collect(() => search(query, signal).catch(() => undefined), 32))))
-        }
-    }
-    await Promise.all([first, later, earlyChannels])
-    if (relatedChannels) await expandChannels()
+    await Promise.all([first, later])
     sections.contents.push(...extra)
-    arrangeRegionalPage(sections, title, [...more, ...(additional?.() || [])], new Set(seen))
+    arrangeRegionalPage(sections, title, additional?.() || [], new Set(seen))
 }
 
 module.exports = { matchesRegion, cachedRegionalRows, regionalRows, fillRegionalPage, arrangeRegionalPage, countFullRows, pageRows }

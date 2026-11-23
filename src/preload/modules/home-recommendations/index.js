@@ -236,7 +236,7 @@ module.exports = () => {
                 activeBrowse = new AbortController()
             }
             staged = undefined
-            if (typeof document !== 'undefined') showRegionalLoading(false)
+            showRegionalLoading(Boolean(feed.regionFor(request)))
         }
         if (info) info.homeSignal = activeBrowse?.signal
         return feed.prepareRequest(request, config.prefer_uk_creators) ? JSON.stringify(request) : body
@@ -312,7 +312,6 @@ module.exports = () => {
         if (discoveryContext?.client && (region || config.prefer_uk_creators)) {
             discoveryContext.client.gl = region === 'EU' ? 'FR' : 'GB'
         }
-        let countryFound
         const moreTitle = region === 'UK' ? labels().more_uk || english.more_uk : labels().more_europe || english.more_europe
         const regionalOptions = {
             region, excluded, signal: workSignal,
@@ -320,8 +319,7 @@ module.exports = () => {
             onMatch: tile => {
                 if (page) {
                     if (page.tiles.size < 96 && !page.tiles.has(tile.contentId)) page.tiles.set(tile.contentId, structuredClone(tile))
-                    page.progress?.()
-                } else countryFound?.()
+                }
             },
             known: tile => {
                 const identity = details(tile)
@@ -381,18 +379,8 @@ module.exports = () => {
                     related: isDiscovery && info.related && ((id, signal = workSignal) => info.related(context, id, signal))
                 }
                 if (isDiscovery && Array.isArray(sections?.contents)) {
-                    const requestedChannels = new Set()
                     await fillRegionalPage(sections, { ...settings, title: moreTitle, seen: seenRegional,
-                        additional: page && regionalInventory,
-                        search: info.regionalSearch && ((query, signal) => info.regionalSearch(context, query, signal)),
-                        relatedChannels: page && info.channel && (signal => {
-                            const channels = new Set([...page.tiles.values()].map(tile => details(tile).id).filter(Boolean))
-                            return [...channels].filter(id => !requestedChannels.has(id)).slice(0, 5 - requestedChannels.size)
-                                .map(id => {
-                                    requestedChannels.add(id)
-                                    return () => info.channel(context, id, signal)
-                                })
-                        })
+                        additional: page && regionalInventory
                     })
                     rows = feed.lists(result)
                 } else await regionalRows(lists, settings)
@@ -414,6 +402,12 @@ module.exports = () => {
             if (source === 'uploads') {
                 result.continuationContents = { horizontalListContinuation: uploadList }
                 return { json: result, cards, uploadIds, suggestions: [] }
+            }
+            if (region && sections) {
+                // Subscription overlap is known now. Refill the discovery slots after
+                // removing those duplicates, before assigning native geometry/menus.
+                arrangeRegionalPage(sections, moreTitle, regionalInventory(), new Set([...seenRegional, ...uploadIds]))
+                rows = feed.lists(result)
             }
             if (hasHome && (uploadList?.items.length || (!region && uploadList?.continuations?.length))) {
                 const index = sections.contents.findIndex(item => item.shelfRenderer || item.gridRenderer)
@@ -451,26 +445,33 @@ module.exports = () => {
         if (page && !cachedPage) {
             page.promise = complete.then(snapshot => {
                 page.finished = true
-                page.progress = undefined
                 if (!workSignal.aborted && snapshot?.cards.size &&
                     (!page.snapshot || snapshot.fullRows >= page.snapshot.fullRows)) page.snapshot = snapshot
                 if (!page.snapshot && regionalPages.get(region) === page) regionalPages.delete(region)
-                return page.snapshot
+                return page.snapshot || snapshot
             })
             complete = page.promise
         }
+        if (region) {
+            // Deliver one prepared response. Country lookups and personalised backfill
+            // may keep warming the cache after navigation, but never reload the route.
+            let cancelled
+            const abort = new Promise(resolve => {
+                cancelled = () => resolve()
+                if (signal?.aborted) cancelled()
+                else signal?.addEventListener('abort', cancelled, { once: true })
+            })
+            let snapshot
+            try { snapshot = await Promise.race([complete, abort]) }
+            finally { signal?.removeEventListener('abort', cancelled) }
+            return !signal?.aborted && snapshot ? publish(snapshot) : JSON.stringify(feed.emptyRegionalResponse(request, json))
+        }
         let initial
-        const warmRegion = region && feed.lists(json).some(list => list.items.some(item => {
-            const tile = feed.video(item) || feed.lockupTile(item?.lockupViewModel)
-            return tile && !excluded.has(tile.contentId) && matchesRegion(regionalOptions.known(tile), region)
-        }))
-        const firstPaintBudget = region && request.continuation ? 5200 : warmRegion ? 80 : region ? 500 : 250
-        // An explicit scroll can wait for a fuller next page. A screen switch never waits for it.
         let timer
         let stopWaiting
         const firstPaint = new Promise(resolve => {
             stopWaiting = () => resolve()
-            timer = setTimeout(stopWaiting, firstPaintBudget)
+            timer = setTimeout(stopWaiting, 250)
             signal?.addEventListener('abort', stopWaiting, { once: true })
         })
         try { initial = await Promise.race([complete, firstPaint]) }
@@ -478,64 +479,25 @@ module.exports = () => {
             clearTimeout(timer)
             signal?.removeEventListener('abort', stopWaiting)
         }
-        if (signal?.aborted) return region ? '{}' : undefined
+        if (signal?.aborted) return
         if (initial) return publish(initial)
         const draft = await build(false)
         const first = saved?.snapshot && saved.snapshot.fullRows >= draft.fullRows ? saved.snapshot : draft
         if (hasHome && !signal?.aborted && !info.skipHomeUpgrade && typeof document !== 'undefined') {
-            const browseId = feed.regionalHomes[region] || 'FEtopics'
+            const browseId = 'FEtopics'
             const key = info.regionalKey
             let visible = first
-            let coldTimer
-            let idleTimer
-            signal?.addEventListener('abort', () => {
-                clearTimeout(idleTimer)
-                clearTimeout(coldTimer)
-            }, { once: true })
             function upgrade(snapshot) {
                 if (!snapshot || signal?.aborted || currentHome !== browseId || !onHomeRoute()) return
                 if (snapshot.fullRows <= visible.fullRows && snapshot.cards.size <= visible.cards.size && snapshot.uploadIds.size <= visible.uploadIds.size &&
                     snapshot.suggestions.length <= visible.suggestions.length) return
-                if (lastInteraction !== interaction && visible.cards.size) {
-                    if (!region) return
-                    const browsing = Date.now() - lastInteraction < 1200 || document.hidden ||
-                        document.querySelector('[role="dialog"], #vt-settings-overlay-root:not(.vt-settings-hidden), ytlr-overlay-panel-renderer')
-                    if (browsing) {
-                        clearTimeout(idleTimer)
-                        idleTimer = setTimeout(() => upgrade(snapshot), 1200)
-                        return
-                    }
-                }
+                if (lastInteraction !== interaction && visible.cards.size) return
                 visible = snapshot
                 const pending = staged?.browseId === browseId && staged.until > Date.now()
-                // Leanback caches browse routes by ID and params. Give an enriched
-                // regional page a fresh key, then strip it from the YouTube request.
-                let params
-                if (region) params = pending ? staged.params : newRegionalParams()
-                staged = { snapshot, browseId, key, params, until: Date.now() + 5000 }
-                if (!pending) commands.resolveCommand({ browseEndpoint: { browseId, params } })
+                staged = { snapshot, browseId, key, until: Date.now() + 5000 }
+                if (!pending) commands.resolveCommand({ browseEndpoint: { browseId } })
             }
-            if (region && first.fullRows < pageRows) {
-                if (!first.cards.size) showRegionalLoading(true)
-                countryFound = () => {
-                    if (coldTimer || signal?.aborted || visible.fullRows >= pageRows) return
-                    coldTimer = setTimeout(() => {
-                        coldTimer = undefined
-                        if (!signal?.aborted) void build(false).then(snapshot => {
-                            if (!visible.cards.size || snapshot.fullRows >= visible.fullRows + 2 || snapshot.fullRows >= pageRows) {
-                                if (page && (!page.snapshot || snapshot.fullRows >= page.snapshot.fullRows)) page.snapshot = snapshot
-                                upgrade(snapshot)
-                            }
-                        }).catch(() => {})
-                    }, 300)
-                }
-                if (page) page.progress = countryFound
-                if (page?.tiles.size) countryFound()
-            }
-            void complete.then(upgrade).finally(() => {
-                clearTimeout(coldTimer)
-                if (region && !signal?.aborted) showRegionalLoading(false)
-            }).catch(() => {})
+            void complete.then(upgrade).catch(() => {})
         }
         return publish(first)
     }
@@ -551,6 +513,15 @@ module.exports = () => {
             if (!isBrowse(url) || isKids(request) || !feed.regionFor(request)) throw error
             console.warn('[regional Home] Could not render a filtered response:', error.name)
             return JSON.stringify(feed.emptyRegionalResponse(request, json))
+        } finally {
+            if (request?.browseId && feed.regionFor(request) && !info.homeSignal?.aborted) {
+                // Native renders after this response is released. Cover its first
+                // layout pass so the old page cannot flash underneath the new grid.
+                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(() => {
+                    if (!info.homeSignal?.aborted) showRegionalLoading(false)
+                }))
+                else showRegionalLoading(false)
+            }
         }
     })
     commands.addInputModifier(command => {

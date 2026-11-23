@@ -199,13 +199,21 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     coldSections.contents.push(feed.subscriptionShelf({ items: [],
         continuations: [{ nextContinuationData: { continuation: 'empty-shelf' } }] }, 'Empty shelf'))
     coldSections.continuations = [{ nextContinuationData: { continuation: 'next-page' } }]
-    const cold = await browse(regional, coldHome, async () => undefined)
-    assert.equal(cold.sent.browseId, 'FEtopics')
-    assert.deepEqual(feed.lists(cold.json), [], 'an unresolved country never enters the first grid')
-    assert.equal(feed.sectionList(cold.json).continuations[0].nextContinuationData.continuation, 'vacuumtube.home.home.UK.next-page')
+    let coldSettled = false
+    const coldRequest = browse(regional, coldHome, async () => undefined).then(result => {
+        coldSettled = true
+        return result
+    })
+    await new Promise(resolve => setTimeout(resolve, 650))
+    assert.equal(coldSettled, false, 'the regional response waits for verified results instead of painting an empty intermediate grid')
+    assert.deepEqual(commands, [], 'country progress never triggers a route reload')
     const pendingRequests = publicRequests
     assert.ok(pendingRequests > 0)
     await browse({ browseId: 'FEsubscriptions' })
+    const cold = await coldRequest
+    assert.equal(cold.sent.browseId, 'FEtopics')
+    assert.deepEqual(feed.lists(cold.json), [], 'an unresolved country never enters the first grid')
+    assert.equal(feed.sectionList(cold.json).continuations, undefined, 'cancelled responses carry no cursors into the next screen')
     finishCountry()
     await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(commands, [], 'a finished lookup never reopens a regional screen the user left')
@@ -262,11 +270,28 @@ test('preload combines feeds, handles actions and older uploads, and leaves othe
     assert.match(partial.params, /^vacuumtube-region-refresh-/)
     const fuller = hooks.action(uk).browseEndpoint
     assert.notEqual(fuller.params, partial.params, 'a partial native page is never reused')
-    const videos = Array.from({ length: 30 }, (_, index) => item(String(index + 100).padStart(11, '0'), other))
-    const full = await browse(fuller, emptyHome, async () => undefined, {
-        regionalSearch: async () => ({ contents: videos })
-    })
+    const videos = Array.from({ length: 24 }, (_, index) => item(String(index + 100).padStart(11, '0'), other))
+    const nextHome = structuredClone(emptyHome)
+    feed.sectionList(nextHome).continuations = [{ nextContinuationData: { continuation: 'personalised-next' } }]
+    let releaseBackfill
+    const backfill = new Promise(resolve => { releaseBackfill = resolve })
+    let fullSettled = false
+    const fullRequest = browse(fuller, nextHome, async () => surface({ gridRenderer: { items: videos.slice(0, 4) } }), {
+        continuation: async () => {
+            await backfill
+            return { continuationContents: { sectionListContinuation: {
+            contents: [feed.subscriptionShelf({ items: videos }, 'Recommended')]
+            } } }
+        }
+    }).then(result => { fullSettled = true; return result })
+    await new Promise(resolve => setTimeout(resolve, 650))
+    assert.equal(fullSettled, false, 'the first usable page waits for its personalised backfill')
+    releaseBackfill()
+    const full = await fullRequest
     assert.equal(feed.lists(full.json).length, 6)
+    assert.ok(feed.lists(full.json).every(list => list.items.length === 4), 'subscription overlap is removed before the final four-card rows are filled')
+    assert.equal(new Set(feed.lists(full.json).flatMap(list => list.items.map(item => feed.video(item).contentId))).size, 24)
+    assert.deepEqual(commands, [], 'the completed grid is delivered once without staged reloads')
     await browse({ browseId: 'FElibrary' })
     assert.equal(hooks.action(uk).browseEndpoint.params, fuller.params, 'reopening UK uses the complete native page')
 })
