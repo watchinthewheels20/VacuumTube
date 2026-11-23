@@ -1,5 +1,6 @@
-//shared constants for the main process
+// Shared application identity and distribution source.
 
 module.exports = {
-    appId: 'rocks.shy.VacuumTube'
+    appId: 'rocks.shy.VacuumTube',
+    githubRepository: 'watchinthewheels20/VacuumTube'
 }

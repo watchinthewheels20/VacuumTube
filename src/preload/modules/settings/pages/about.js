@@ -1,4 +1,5 @@
 //about page, opened from the header's "?" button
+const { githubRepository } = require('../../../../constants')
 //update state comes from the main process (src/updater.js), which sends it here when it changes
 
 const fs = require('fs')
@@ -123,6 +124,7 @@ module.exports = {
             },
             {
                 rows: [
+                    { type: 'info', title: about.distribution_label || 'Distribution', value: githubRepository },
                     { type: 'info', title: about.platform_label, value: platformLabel(about) },
                     { type: 'info', title: about.installation_label, value: about.installations[state.installationType] || about.installations.unknown },
                     { type: 'info', title: about.update_method_label, value: updateMethodLabel(about) }

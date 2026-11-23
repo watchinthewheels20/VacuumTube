@@ -1,9 +1,9 @@
 const fs = require('fs')
 const path = require('path')
-const { appId } = require('./constants.js')
+const { appId, githubRepository } = require('./constants.js')
 
-const PROJECT_URL = 'https://github.com/watchinthewheels20/VacuumTube'
-const RELEASES_URL = `${PROJECT_URL}/releases/latest`
+const PROJECT_URL = `https://github.com/${githubRepository}`
+const RELEASES_URL = `${PROJECT_URL}/releases`
 const FLATPAK_URL = `https://flathub.org/apps/${appId}`
 
 let app;
@@ -53,18 +53,8 @@ function detectInstallation({
     }
 }
 
-function getManualDownloadUrl(platform = process.platform, arch = process.arch, installationType = 'unknown') {
+function getManualDownloadUrl(installationType) {
     if (installationType === 'flatpak') return FLATPAK_URL;
-
-    if (platform === 'win32') {
-        const windowsArch = arch === 'arm64' ? 'arm64' : 'x64'
-        return `${RELEASES_URL}/download/VacuumTube-${windowsArch}-Portable.zip`;
-    } else if (platform === 'darwin') {
-        return `${RELEASES_URL}/download/VacuumTube-universal.dmg`;
-    } else if (platform === 'linux') {
-        if (installationType === 'flatpak') return FLATPAK_URL;
-    }
-
     return RELEASES_URL;
 }
 
@@ -210,7 +200,7 @@ function setup(options) {
     options.electron.ipcMain.handle('open-project-page', () => openExternal(PROJECT_URL))
     options.electron.ipcMain.handle('open-release-page', () => openExternal(RELEASES_URL))
     options.electron.ipcMain.handle('open-update-download', () => openExternal(
-        getManualDownloadUrl(state.platform, state.arch, state.installationType)
+        getManualDownloadUrl(state.installationType)
     ))
 
     options.electron.ipcMain.on('can-auto-update', (event) => {

@@ -6,6 +6,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { listPackage } from '@electron/asar'
 
 // Use a hosted Windows runner: this deliberately exercises the normal per-user
 // installation, including the real uninstaller registration and default profile.
@@ -80,6 +81,17 @@ async function install() {
     await run(setup, ['/S', '/currentuser', '/D=' + installDir])
     await fs.access(app)
 }
+async function checkDistribution() {
+    const resources = path.join(installDir, 'resources')
+    const updateSource = await fs.readFile(path.join(resources, 'app-update.yml'), 'utf8')
+    assert.match(updateSource, /^owner: watchinthewheels20\s*$/m)
+    assert.match(updateSource, /^repo: VacuumTube\s*$/m)
+    const files = new Set(listPackage(path.join(resources, 'app.asar')).map(file => file.replaceAll('\\', '/')))
+    for (const module of ['sidebar.js', 'home-recommendations/regions.js']) {
+        assert.ok(files.has('/src/preload/modules/' + module), module + ' is included in the installed fork')
+    }
+    console.log('Installer contains the fork’s regional feeds, sidebar and update source.')
+}
 async function uninstall() {
     // _?= keeps the uninstaller in-process so its exit means removal has finished.
     await run(uninstaller, ['/S', '/currentuser', '_?=' + installDir])
@@ -87,6 +99,7 @@ async function uninstall() {
 }
 try {
     await install()
+    await checkDistribution()
     await checkProfile(true)
     await install()
     await checkProfile(false)

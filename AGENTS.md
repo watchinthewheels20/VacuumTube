@@ -13,7 +13,7 @@
 
 ## Read before modifying relevant areas
 
-- `README.md`: app overview, settings, keyboard/controller mappings, and local configuration. **Caution:** its upstream download/build links and platform list do not describe this fork's current release workflow.
+- `README.md`: app overview, fork installer link, settings, keyboard/controller mappings, and local configuration.
 - `package.json` and `package-lock.json`: app version, dependencies, Electron Builder configuration, installer identity and targets.
 - `src/index.js`, `src/preload/index.js`, and `src/preload/modules/`: Electron window lifecycle, IPC, YouTube Leanback integration and input behaviour.
 - `src/preload/modules/media-session-focus.js`, `src/preload/util/controller.js`, and `src/preload/modules/pause-on-blur.js`: remote/media actions, focus rules and the separate pause-on-blur setting.
@@ -48,7 +48,7 @@
 - Local setup: `npm ci`; launch during development: `npm start`; automated tests: `npm test` (Node's built-in test runner).
 - Local Windows x64 packaging: `npx electron-builder --win nsis --x64 --publish never`. Run on Windows with the locked dependencies; output goes to `dist/`.
 - CI workflow: **VacuumTube Windows installer** — `.github/workflows/windows-dev-build.yml`. Runs for `main` pushes, pull requests targeting `main`, and manual dispatch; uses Windows runners and Node.js 22.
-- CI installs dependencies, runs tests, builds the x64 NSIS setup and validates the EXE, blockmap and update metadata. Its Windows smoke test silently installs over an existing copy, uninstalls and reinstalls, and checks a synthetic persistent cookie and local storage in the normal profile. Interactive wizard navigation, live YouTube sign-in and physical remotes require hands-on verification.
+- CI installs dependencies, runs tests, builds the x64 NSIS setup and validates the EXE, blockmap and update metadata. Its Windows smoke test checks that the installed copy includes the fork's regional feed and updater source, then tests profile retention over installation, uninstallation and reinstallation. Interactive wizard navigation, live YouTube sign-in and physical remotes require hands-on verification.
 - Publishing: successful `main` runs create GitHub **prereleases** tagged `vacuumtube-dev-<run_number>-<run_attempt>`. Release assets are the setup EXE, blockmap and `latest.yml`; CI retains only the newest **two** development releases.
 - Installation/update: download the matching, verified `VacuumTube-Setup.exe` asset from **this fork's** GitHub Releases, close VacuumTube and run its installer wizard. For test builds, use the explicit release asset rather than assuming the application's automatic updater will detect a same-version development build.
 - Rollback: identify the last tested-good GitHub release and download its installer **if that release is still retained**; reinstall it, checking existing preferences and playback. Because old development releases are pruned, preserve a known-good installer separately before risky iterations. Validate compatibility before changing persistent formats.
